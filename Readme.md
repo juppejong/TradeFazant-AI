@@ -26,7 +26,7 @@ Thanks to `concurrently`, you can boot up both the backend and the frontend simu
 
 ### 1. Clone the Repository
 First, download the code to your local machine and navigate into the project folder:
-```bash
+
 git clone https://github.com/juppejong/TradeFazant-AI.git
 cd TradeFazant-AI
 
