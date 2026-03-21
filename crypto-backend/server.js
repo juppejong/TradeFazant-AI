@@ -14,9 +14,9 @@ const KRAKEN_API_URL = 'https://api.kraken.com';
 // ==========================================
 // DEFAULT API KEYS (Fallback)
 // ==========================================
-const KRAKEN_API_KEY = 'lsG8vrhBXgvuCAT1g6FUpB4W5dvWrty+8xYcjydYMkqTbfB6qSl9V6p1';
-const KRAKEN_API_SECRET = '56wLpHZLYd9zBWHjT9mkpgozfOtHM/x43+xncTvoeLx2pP335fY1LwmoFmAxOT/ZcuLorIKJgaCdvghTdL8LhQ==';
-const GEMINI_API_KEY = 'AIzaSyA-Ca3xn4dr7u5x_8kjg3IKPzhSXu54PqQ';
+const KRAKEN_API_KEY = '';
+const KRAKEN_API_SECRET = '';
+const GEMINI_API_KEY = '';
 
 const requireAuth = (req, res, next) => {
     next();
