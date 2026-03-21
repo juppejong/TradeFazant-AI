@@ -26,9 +26,28 @@ Thanks to `concurrently`, you can boot up both the backend and the frontend simu
 ### 1. Installation
 Ensure you are in the root directory of the project and install all necessary dependencies:
 
+<<<<<<< HEAD
 ```bash
 # Install root dependencies (including concurrently)
 npm install
+=======
+🏗️ Tech Stack
+
+React + Zustand
+
+Node.js
+
+Kraken API (REST + WebSocket)
+
+▶️ Getting Started
+1. Clone the repository
+git clone https://github.com/juppejong/new-bot.git
+cd new-bot
+
+2. Install dependencies
+
+Install for both backend and frontend:
+>>>>>>> d3db3c3808522f9bd19d33d76cab02135176ac5e
 
 # Install backend dependencies
 cd crypto-backend
