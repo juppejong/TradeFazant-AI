@@ -4,7 +4,28 @@
   },
   "devDependencies": {
     "autoprefixer": "^10.4.27",
+    "concurrently": "^9.2.1",
     "postcss": "^8.5.8",
     "tailwindcss": "^4.2.1"
-  }
+  },
+  "name": "new-bot",
+  "version": "1.0.0",
+  "description": "▶️ Getting Started\r 1. Clone the repo\r git clone https://github.com/juppejong/new-bot.git\r cd new-bot",
+  "main": "index.js",
+  "scripts": {
+    "dev": "concurrently \"npm run backend\" \"npm run frontend\"",
+    "backend": "cd crypto-backend && node server.js",
+    "frontend": "cd crypto-dashboard && npm run dev"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/juppejong/new-bot.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/juppejong/new-bot/issues"
+  },
+  "homepage": "https://github.com/juppejong/new-bot#readme"
 }
