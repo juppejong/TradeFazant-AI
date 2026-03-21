@@ -1,5 +1,6 @@
 # TradeFazant AI 📈🤖
-![alt text](image.png)
+<img width="1906" height="902" alt="image" src="https://github.com/user-attachments/assets/f7015f91-8b82-4e86-94e2-ea6a26b915ef" />
+
 > An advanced quantitative crypto trading dashboard powered by the **Kraken API** and **Google Gemini AI** for smart, automated market analysis and trading.
 
 Built with React and Node.js, TradeFazant AI bridges the gap between manual trading and algorithmic automation. It offers a sleek interface to manage your portfolio, run automated trading strategies, and leverage AI to make data-driven market decisions.
@@ -25,13 +26,15 @@ Thanks to `concurrently`, you can boot up both the backend and the frontend simu
 
 ### 1. Clone the Repository
 First, download the code to your local machine and navigate into the project folder:
-```bash
+```
 git clone https://github.com/juppejong/TradeFazant-AI.git
 cd TradeFazant-AI
+npm install
+```
 
 ### 1. Installation
 Ensure you are in the root directory of the project and install all necessary dependencies:
-
+```
 # Install backend dependencies
 cd crypto-backend
 npm install
@@ -39,11 +42,13 @@ npm install
 # Install frontend dependencies
 cd ../crypto-dashboard
 npm install
+```
 2. Run the Platform
 Navigate back to the root directory of your project and start the development environment:
 
-Bash
+```
 npm run dev
+```
 This command will automatically spin up the Node.js backend on port 3001 and launch the Vite/React frontend in your default browser.
 
 3. Configuration
