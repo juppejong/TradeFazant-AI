@@ -29,6 +29,7 @@ First, download the code to your local machine and navigate into the project fol
 ```
 git clone https://github.com/juppejong/TradeFazant-AI.git
 cd TradeFazant-AI
+npm install
 ```
 
 ### 1. Installation
