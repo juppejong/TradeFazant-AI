@@ -150,7 +150,10 @@ app.post('/api/chat', requireAuth, async (req, res) => {
         const response = await axios.post(url, payload, { headers: { 'Content-Type': 'application/json' } });
         const text = response.data.candidates?.[0]?.content?.parts?.[0]?.text || "Geen antwoord.";
         res.json({ text });
-    } catch (err) { res.status(500).json({ error: "Fout bij communicatie met AI." }); }
+    } catch (err) { 
+        console.error("🔥 Gemini Chat Error:", err.response ? JSON.stringify(err.response.data, null, 2) : err.message);
+        res.status(500).json({ error: "Fout bij communicatie met AI." }); 
+    }
 });
 
 app.post('/api/ai/analyze', requireAuth, async (req, res) => {
@@ -167,6 +170,10 @@ app.post('/api/ai/analyze', requireAuth, async (req, res) => {
 
         const response = await axios.post(url, payload, { headers: { 'Content-Type': 'application/json' } });
         let text = response.data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+        
+        // FIX: Verwijder eventuele markdown codeblok-tags (```json en ```) die Gemini soms meestuurt
+        text = text.replace(/```json/gi, '').replace(/```/g, '').trim();
+        
         res.json(JSON.parse(text));
     } catch (err) {
         res.status(500).json({ error: "AI Analyse mislukt", bias: "NEUTRAL", confidence: 0, advice: "NO_TRADE", reasoning: "Fout bij ophalen." });
@@ -187,6 +194,10 @@ app.post('/api/ai/tune', requireAuth, async (req, res) => {
         
         const response = await axios.post(url, payload, { headers: { 'Content-Type': 'application/json' } });
         let text = response.data.candidates[0].content.parts[0].text;
+        
+        // FIX: Verwijder eventuele markdown codeblok-tags
+        text = text.replace(/```json/gi, '').replace(/```/g, '').trim();
+        
         res.json(JSON.parse(text));
     } catch(err) { res.status(500).json({error: "Tuning mislukt"}); }
 });
