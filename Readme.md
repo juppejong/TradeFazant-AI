@@ -31,7 +31,7 @@ Kraken API (REST + WebSocket)
 
 ▶️ Getting Started
 1. Clone the repository
-git clone https://github.com/juppejong/new-botgit
+git clone https://github.com/juppejong/new-bot.git
 cd new-bot
 
 2. Install dependencies
