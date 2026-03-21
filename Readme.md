@@ -1,11 +1,40 @@
+🚀 Crypto Trading Platform
+
+A real-time crypto trading platform that combines advanced charting, automated trading bots, and AI-powered market insights — all in one place.
+
+✨ What this platform offers
+
+📊 Advanced Charts
+Real-time price data with indicators like SMA, EMA, RSI, Bollinger Bands, and VWAP
+
+💱 Trading Interface
+Market & limit orders, live orderbook, and position tracking
+
+🤖 Trading Bots
+Automated strategies based on technical indicators
+
+🧠 AI Insights
+AI-powered market analysis and trade suggestions
+
+⚡ Real-Time Engine
+Fast updates via WebSocket connections
+
+🏗️ Tech Stack
+
+React + Zustand
+
+Node.js
+
+Kraken API (REST + WebSocket)
+
 ▶️ Getting Started
-1. Clone the repo
-git clone https://github.com/juppejong/new-bot.git
-cd new-bot
+1. Clone the repository
+git clone https://github.com/your-username/crypto-trading-platform.git
+cd crypto-trading-platform
 
 2. Install dependencies
 
-You need to install dependencies for both frontend and backend.
+Install for both backend and frontend:
 
 cd crypto-backend
 npm install
@@ -13,27 +42,38 @@ npm install
 cd ../crypto-dashboard
 npm install
 
-3. Start the backend
+cd ..
+npm install
 
-Open a terminal:
+3. Run the app
 
-cd crypto-backend
-node server.js
+Start backend + frontend together:
 
-4. Start the frontend (Vite)
-
-Open a second terminal:
-
-cd crypto-dashboard
 npm run dev
 
-5. Open the app
+4. Open in browser
 http://localhost:5173
 
 ⚠️ Requirements
 
-Make sure you have installed:
+Node.js (v18+ recommended)
 
-Node.js (v18 or higher recommended)
+🚧 Status
 
-npm (comes with Node)
+Work in progress — actively improving:
+
+WebSocket performance
+
+Trading bots
+
+Portfolio tracking
+
+⚠️ Disclaimer
+
+This project is for educational purposes only.
+Trading cryptocurrencies involves risk.
+
+⭐ Vision
+
+Build a powerful all-in-one trading platform combining:
+charts + automation + AI

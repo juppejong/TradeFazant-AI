@@ -1,3 +1,4 @@
 node_modules/
 .env
 info.txt
+crypto-backend/server copy.js
