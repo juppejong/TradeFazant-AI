@@ -29,8 +29,8 @@ Kraken API (REST + WebSocket)
 
 ▶️ Getting Started
 1. Clone the repository
-git clone https://github.com/your-username/crypto-trading-platform.git
-cd crypto-trading-platform
+git clone https://github.com/your-username/new-botgit
+cd new-bot
 
 2. Install dependencies
 
