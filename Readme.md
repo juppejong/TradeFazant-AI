@@ -26,13 +26,14 @@ Thanks to `concurrently`, you can boot up both the backend and the frontend simu
 
 ### 1. Clone the Repository
 First, download the code to your local machine and navigate into the project folder:
-
+```
 git clone https://github.com/juppejong/TradeFazant-AI.git
 cd TradeFazant-AI
+```
 
 ### 1. Installation
 Ensure you are in the root directory of the project and install all necessary dependencies:
-
+```
 # Install backend dependencies
 cd crypto-backend
 npm install
@@ -40,11 +41,13 @@ npm install
 # Install frontend dependencies
 cd ../crypto-dashboard
 npm install
+```
 2. Run the Platform
 Navigate back to the root directory of your project and start the development environment:
 
-Bash
+```
 npm run dev
+```
 This command will automatically spin up the Node.js backend on port 3001 and launch the Vite/React frontend in your default browser.
 
 3. Configuration
