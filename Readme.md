@@ -1,5 +1,6 @@
 # TradeFazant AI 📈🤖
-![alt text](image.png)
+<img width="1906" height="902" alt="image" src="https://github.com/user-attachments/assets/f7015f91-8b82-4e86-94e2-ea6a26b915ef" />
+
 > An advanced quantitative crypto trading dashboard powered by the **Kraken API** and **Google Gemini AI** for smart, automated market analysis and trading.
 
 Built with React and Node.js, TradeFazant AI bridges the gap between manual trading and algorithmic automation. It offers a sleek interface to manage your portfolio, run automated trading strategies, and leverage AI to make data-driven market decisions.
