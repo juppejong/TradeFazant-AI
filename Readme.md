@@ -1,4 +1,6 @@
 🚀 Crypto Trading Platform
+<img width="1917" height="911" alt="image" src="https://github.com/user-attachments/assets/a8522809-49ac-4731-ae7e-7c5b50dd6d92" />
+
 
 A real-time crypto trading platform that combines advanced charting, automated trading bots, and AI-powered market insights — all in one place.
 
