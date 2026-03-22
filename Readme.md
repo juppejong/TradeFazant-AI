@@ -1,5 +1,11 @@
 # TradeFazant AI 📈🤖
-<img width="1906" height="902" alt="image" src="https://github.com/user-attachments/assets/f7015f91-8b82-4e86-94e2-ea6a26b915ef" />
+<img width="600" height="280" alt="image" src="https://github.com/user-attachments/assets/5ffe1cbe-b9fe-4b2c-a23f-193765124344" />
+
+<img width="600" height="280" alt="image" src="https://github.com/user-attachments/assets/6d1327d7-280a-4912-a9db-d5959df49402" />
+
+<img width="600" height="280" alt="image" src="https://github.com/user-attachments/assets/67ea02f7-e873-4a59-8e53-bb566ee86973" />
+
+<img width="600" height="280" alt="image" src="https://github.com/user-attachments/assets/6c19c40c-03ac-4daf-b2bf-f46bf5d8c490" />
 
 > An advanced quantitative crypto trading dashboard powered by the **Kraken API** and **Google Gemini AI** for smart, automated market analysis and trading.
 
