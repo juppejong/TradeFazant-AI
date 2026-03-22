@@ -87,3 +87,93 @@ export const calculateRSI = (data, period) => {
   }
   return rsiData;
 };
+
+// ... (laat je bestaande SMA, EMA, MACD, BB, RSI code gewoon staan) ...
+
+// ==========================================
+// 📈 DYNAMISCH RISICO & TREND INDICATOREN
+// ==========================================
+
+export const calculateATR = (data, period = 14) => {
+  const atrData = [];
+  if (data.length <= period) return atrData;
+  let trSum = 0;
+  const trValues = [0]; // True Range van eerste candle is 0
+
+  for (let i = 1; i < data.length; i++) {
+    const high = data[i].high;
+    const low = data[i].low;
+    const prevClose = data[i - 1].close;
+    // True Range is de grootste van de 3 absolute prijsverschillen
+    const tr = Math.max(
+      high - low,
+      Math.abs(high - prevClose),
+      Math.abs(low - prevClose)
+    );
+    trValues.push(tr);
+  }
+
+  // Eerste ATR is een simpele gemiddelde (SMA) van de TR
+  for(let i=1; i<=period; i++) trSum += trValues[i];
+  let prevAtr = trSum / period;
+  atrData.push({ time: data[period].time, value: prevAtr });
+
+  // Vanaf daar gebruiken we Wilder's Smoothing
+  for (let i = period + 1; i < data.length; i++) {
+    const currentAtr = (prevAtr * (period - 1) + trValues[i]) / period; 
+    atrData.push({ time: data[i].time, value: currentAtr });
+    prevAtr = currentAtr;
+  }
+  return atrData;
+};
+
+export const calculateADX = (data, period = 14) => {
+  const adxData = [];
+  if (data.length <= period * 2) return adxData;
+  
+  let trSum = 0, plusDmSum = 0, minusDmSum = 0;
+  const trArr = [0], plusDmArr = [0], minusDmArr = [0];
+
+  for (let i = 1; i < data.length; i++) {
+    const upMove = data[i].high - data[i-1].high;
+    const downMove = data[i-1].low - data[i].low;
+    
+    let plusDM = 0;
+    if (upMove > downMove && upMove > 0) plusDM = upMove;
+    let minusDM = 0;
+    if (downMove > upMove && downMove > 0) minusDM = downMove;
+
+    const tr = Math.max(data[i].high - data[i].low, Math.abs(data[i].high - data[i-1].close), Math.abs(data[i].low - data[i-1].close));
+    
+    trArr.push(tr); plusDmArr.push(plusDM); minusDmArr.push(minusDM);
+  }
+
+  for (let i=1; i<=period; i++) { trSum+=trArr[i]; plusDmSum+=plusDmArr[i]; minusDmSum+=minusDmArr[i]; }
+
+  const dxArr = [];
+  for (let i = period; i < data.length; i++) {
+    if (i > period) {
+      trSum = trSum - (trSum/period) + trArr[i];
+      plusDmSum = plusDmSum - (plusDmSum/period) + plusDmArr[i];
+      minusDmSum = minusDmSum - (minusDmSum/period) + minusDmArr[i];
+    }
+    const plusDI = 100 * (plusDmSum / trSum);
+    const minusDI = 100 * (minusDmSum / trSum);
+    const dx = 100 * (Math.abs(plusDI - minusDI) / (plusDI + minusDI || 1));
+    dxArr.push({time: data[i].time, dx, plusDI, minusDI});
+  }
+
+  let adxSum = 0;
+  for(let i=0; i<period; i++) adxSum += dxArr[i].dx;
+  let prevAdx = adxSum / period;
+  
+  adxData.push({ time: dxArr[period-1].time, adx: prevAdx, plusDI: dxArr[period-1].plusDI, minusDI: dxArr[period-1].minusDI });
+
+  for (let i = period; i < dxArr.length; i++) {
+    const currentAdx = ((prevAdx * (period - 1)) + dxArr[i].dx) / period;
+    adxData.push({ time: dxArr[i].time, adx: currentAdx, plusDI: dxArr[i].plusDI, minusDI: dxArr[i].minusDI });
+    prevAdx = currentAdx;
+  }
+  
+  return adxData;
+};

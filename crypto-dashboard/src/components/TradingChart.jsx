@@ -1,4 +1,3 @@
-// src/components/TradingChart.jsx
 import React, { useState, useEffect, useRef } from 'react';
 import ReactDOM from 'react-dom';
 import { ExternalLink } from 'lucide-react';
@@ -59,6 +58,9 @@ export const PopoutWindow = ({ title, externalWindow, onClose, children }) => {
 const TradingChart = ({ pair, timeframe, showVolume, signals, positions, scriptLoaded, isActive, onClick, onPopout, isDrawingMode, externalWindow }) => {
   const chartContainerRef = useRef(null); const chartRef = useRef(null); const seriesRefs = useRef({ candle: null, volume: null, sma1: null, sma2: null, bbUpper: null, bbMiddle: null, bbLower: null, rsi: null, macdLine: null, macdSignal: null, macdHist: null });
   const [marketData, setMarketData] = useState([]); const customLinesRef = useRef([]);
+
+  // 🕒 Timezone Offset (Snelste & beste manier om Lightweight charts lokaal te maken)
+  const localOffset = new Date().getTimezoneOffset() * 60;
 
   useEffect(() => { const loadData = async () => { setMarketData([]); if (!pair || !pair.altname) return; const initialData = await fetchKrakenOHLC(tfMap[timeframe], pair.altname); if (initialData.length > 0) setMarketData(initialData); }; loadData(); }, [pair?.altname, timeframe]);
   
@@ -132,24 +134,27 @@ const TradingChart = ({ pair, timeframe, showVolume, signals, positions, scriptL
   useEffect(() => {
     if (!chartRef.current || marketData.length === 0) return;
     
-    const candleData = marketData.map(d => ({ time: d.time, open: d.open, high: d.high, low: d.low, close: d.close }));
-    const volumeData = marketData.map(d => ({ time: d.time, value: d.volume, color: d.close >= d.open ? 'rgba(16, 185, 129, 0.4)' : 'rgba(239, 68, 68, 0.4)' }));
+    // 🕒 Pas de Tijdzone Offset toe op alle binnengekomen data (maakt het local time!)
+    const shiftedData = marketData.map(d => ({ ...d, time: d.time - localOffset }));
+
+    const candleData = shiftedData.map(d => ({ time: d.time, open: d.open, high: d.high, low: d.low, close: d.close }));
+    const volumeData = shiftedData.map(d => ({ time: d.time, value: d.volume, color: d.close >= d.open ? 'rgba(16, 185, 129, 0.4)' : 'rgba(239, 68, 68, 0.4)' }));
     
     seriesRefs.current.candle.setData(candleData); 
     seriesRefs.current.volume.setData(volumeData); 
     seriesRefs.current.volume.applyOptions({ visible: showVolume });
     
-    seriesRefs.current.sma1.setData(signals.sma1.active ? calculateSMA(marketData, signals.sma1.period) : []);
-    seriesRefs.current.sma2.setData(signals.sma2.active ? calculateSMA(marketData, signals.sma2.period) : []);
+    seriesRefs.current.sma1.setData(signals.sma1.active ? calculateSMA(shiftedData, signals.sma1.period) : []);
+    seriesRefs.current.sma2.setData(signals.sma2.active ? calculateSMA(shiftedData, signals.sma2.period) : []);
     if (signals.bb.active) { 
-        const bbData = calculateBB(marketData, signals.bb.period, signals.bb.stdDev); 
+        const bbData = calculateBB(shiftedData, signals.bb.period, signals.bb.stdDev); 
         seriesRefs.current.bbUpper.setData(bbData.upper); seriesRefs.current.bbMiddle.setData(bbData.middle); seriesRefs.current.bbLower.setData(bbData.lower); 
     } else { 
         seriesRefs.current.bbUpper.setData([]); seriesRefs.current.bbMiddle.setData([]); seriesRefs.current.bbLower.setData([]); 
     }
-    seriesRefs.current.rsi.setData(signals.rsi.active ? calculateRSI(marketData, signals.rsi.period) : []);
+    seriesRefs.current.rsi.setData(signals.rsi.active ? calculateRSI(shiftedData, signals.rsi.period) : []);
     if (signals.macd.active) { 
-        const macdResult = calculateMACD(marketData); 
+        const macdResult = calculateMACD(shiftedData); 
         seriesRefs.current.macdLine.setData(macdResult.map(d => ({ time: d.time, value: d.macd }))); 
         seriesRefs.current.macdSignal.setData(macdResult.map(d => ({ time: d.time, value: d.signal }))); 
         seriesRefs.current.macdHist.setData(macdResult.map(d => ({ time: d.time, value: d.histogram, color: d.histogram >= 0 ? '#26a69a' : '#ef5350' }))); 
@@ -162,7 +167,18 @@ const TradingChart = ({ pair, timeframe, showVolume, signals, positions, scriptL
     if (!seriesRefs.current.candle || !pair) return;
     const currentPairPositions = positions.filter(p => p.pair === pair.id || p.pair === pair.altname || p.pair === pair.display);
     const sortedPositions = [...currentPairPositions].sort((a, b) => a.time - b.time);
-    const markers = sortedPositions.map(pos => { const isBuy = pos.side === 'Long'; return { time: pos.time, position: isBuy ? 'belowBar' : 'aboveBar', color: isBuy ? '#10b981' : '#ef4444', shape: isBuy ? 'arrowUp' : 'arrowDown', text: `${isBuy ? 'Buy' : 'Sell'} @ ${pos.price}`, size: 2 }; });
+    
+    const markers = sortedPositions.map(pos => { 
+        const isBuy = pos.side === 'Long'; 
+        return { 
+            time: pos.time - localOffset, // Verschuif ook de trade markers naar je lokale tijd!
+            position: isBuy ? 'belowBar' : 'aboveBar', 
+            color: isBuy ? '#10b981' : '#ef4444', 
+            shape: isBuy ? 'arrowUp' : 'arrowDown', 
+            text: `${isBuy ? 'Buy' : 'Sell'} @ ${pos.price}`, 
+            size: 2 
+        }; 
+    });
     seriesRefs.current.candle.setMarkers(markers);
   }, [positions, pair]);
 
@@ -189,14 +205,20 @@ const TradingChart = ({ pair, timeframe, showVolume, signals, positions, scriptL
             currentCandles[currentCandles.length - 1] = updatedCandle;
         }
 
-        if (seriesRefs.current.candle) seriesRefs.current.candle.update(updatedCandle);
-        if (seriesRefs.current.volume && showVolume) seriesRefs.current.volume.update({ time: updatedCandle.time, value: updatedCandle.volume, color: updatedCandle.close >= updatedCandle.open ? 'rgba(16, 185, 129, 0.4)' : 'rgba(239, 68, 68, 0.4)' });
+        // Tijdzone offset voor de nieuwe live kaarsen
+        const localTimeForChart = updatedCandle.time - localOffset;
 
-        if (signals.sma1.active && seriesRefs.current.sma1) { const res = calculateSMA(currentCandles, signals.sma1.period); if(res.length) seriesRefs.current.sma1.update(res[res.length-1]); }
-        if (signals.sma2.active && seriesRefs.current.sma2) { const res = calculateSMA(currentCandles, signals.sma2.period); if(res.length) seriesRefs.current.sma2.update(res[res.length-1]); }
-        if (signals.bb.active && seriesRefs.current.bbUpper) { const res = calculateBB(currentCandles, signals.bb.period, signals.bb.stdDev); if(res.upper.length) { seriesRefs.current.bbUpper.update(res.upper[res.upper.length-1]); seriesRefs.current.bbMiddle.update(res.middle[res.middle.length-1]); seriesRefs.current.bbLower.update(res.lower[res.lower.length-1]); } } 
-        if (signals.rsi.active && seriesRefs.current.rsi) { const res = calculateRSI(currentCandles, signals.rsi.period); if(res.length) seriesRefs.current.rsi.update(res[res.length-1]); }
-        if (signals.macd.active && seriesRefs.current.macdLine) { const res = calculateMACD(currentCandles); if(res.length) { const last = res[res.length-1]; seriesRefs.current.macdLine.update({ time: last.time, value: last.macd }); seriesRefs.current.macdSignal.update({ time: last.time, value: last.signal }); seriesRefs.current.macdHist.update({ time: last.time, value: last.histogram, color: last.histogram >= 0 ? '#26a69a' : '#ef5350' }); } }
+        if (seriesRefs.current.candle) seriesRefs.current.candle.update({ ...updatedCandle, time: localTimeForChart });
+        if (seriesRefs.current.volume && showVolume) seriesRefs.current.volume.update({ time: localTimeForChart, value: updatedCandle.volume, color: updatedCandle.close >= updatedCandle.open ? 'rgba(16, 185, 129, 0.4)' : 'rgba(239, 68, 68, 0.4)' });
+
+        // Omdat de indicatoren de VOLLEDIGE array herberekenen, moeten we hier eerst weer alles 'shiften'
+        const shiftedCandlesForIndicators = currentCandles.map(d => ({...d, time: d.time - localOffset}));
+
+        if (signals.sma1.active && seriesRefs.current.sma1) { const res = calculateSMA(shiftedCandlesForIndicators, signals.sma1.period); if(res.length) seriesRefs.current.sma1.update(res[res.length-1]); }
+        if (signals.sma2.active && seriesRefs.current.sma2) { const res = calculateSMA(shiftedCandlesForIndicators, signals.sma2.period); if(res.length) seriesRefs.current.sma2.update(res[res.length-1]); }
+        if (signals.bb.active && seriesRefs.current.bbUpper) { const res = calculateBB(shiftedCandlesForIndicators, signals.bb.period, signals.bb.stdDev); if(res.upper.length) { seriesRefs.current.bbUpper.update(res.upper[res.upper.length-1]); seriesRefs.current.bbMiddle.update(res.middle[res.middle.length-1]); seriesRefs.current.bbLower.update(res.lower[res.lower.length-1]); } } 
+        if (signals.rsi.active && seriesRefs.current.rsi) { const res = calculateRSI(shiftedCandlesForIndicators, signals.rsi.period); if(res.length) seriesRefs.current.rsi.update(res[res.length-1]); }
+        if (signals.macd.active && seriesRefs.current.macdLine) { const res = calculateMACD(shiftedCandlesForIndicators); if(res.length) { const last = res[res.length-1]; seriesRefs.current.macdLine.update({ time: last.time, value: last.macd }); seriesRefs.current.macdSignal.update({ time: last.time, value: last.signal }); seriesRefs.current.macdHist.update({ time: last.time, value: last.histogram, color: last.histogram >= 0 ? '#26a69a' : '#ef5350' }); } }
     };
 
     wsClient.subscribe('ticker', pair.wsname, handleLivePrice);
@@ -209,11 +231,11 @@ const TradingChart = ({ pair, timeframe, showVolume, signals, positions, scriptL
   return (
     <div className={`flex-1 relative bg-[#09090b] border-r border-b border-zinc-800 min-h-0 transition-colors ${isActive ? 'ring-2 ring-inset ring-blue-500 z-10' : ''}`} onClick={onClick}>
       <div className={`absolute inset-0 ${isDrawingMode ? 'cursor-crosshair' : ''}`} ref={chartContainerRef}></div>
-      {marketData.length === 0 && (<div className="absolute inset-0 flex items-center justify-center pointer-events-none"><span className="text-zinc-600 animate-pulse text-xs">Ophalen {pair?.display}...</span></div>)}
+      {marketData.length === 0 && (<div className="absolute inset-0 flex items-center justify-center pointer-events-none"><span className="text-zinc-600 animate-pulse text-xs">Loading {pair?.display}...</span></div>)}
       <div className="absolute top-3 left-3 z-10 bg-[#09090b]/80 border border-zinc-800 px-2 py-1 rounded text-xs text-zinc-300 font-semibold backdrop-blur flex items-center space-x-2 pointer-events-none">
         <span>{pair?.display.replace('XBT', 'BTC')}</span>{isActive && <span className="w-1.5 h-1.5 bg-blue-500 rounded-full shadow-[0_0_8px_rgba(59,130,246,0.8)]"></span>}
       </div>
-      {onPopout && (<button onClick={(e) => { e.stopPropagation(); onPopout(); }} className="absolute top-3 right-3 z-10 bg-[#09090b]/80 border border-zinc-800 p-1.5 rounded text-zinc-400 hover:text-white backdrop-blur transition hover:bg-zinc-800" title="Open in nieuw venster"><ExternalLink className="w-3.5 h-3.5" /></button>)}
+      {onPopout && (<button onClick={(e) => { e.stopPropagation(); onPopout(); }} className="absolute top-3 right-3 z-10 bg-[#09090b]/80 border border-zinc-800 p-1.5 rounded text-zinc-400 hover:text-white backdrop-blur transition hover:bg-zinc-800" title="Open in new window"><ExternalLink className="w-3.5 h-3.5" /></button>)}
     </div>
   );
 };
