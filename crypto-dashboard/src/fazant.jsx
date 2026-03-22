@@ -395,9 +395,27 @@ export default function TradingDashboard() {
     if (hasFetchedBalance.current) return;
     hasFetchedBalance.current = true;
     fetchBalances();
+
+    fetch('http://localhost:3001/api/bots')
+      .then(res => res.json())
+      .then(data => {
+        if (Array.isArray(data)) setBots(data);
+      })
+      .catch(err => console.error("Kon bots niet laden:", err));
+
     const interval = setInterval(fetchBalances, 60000);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+      if (bots.length === 0) return; // Voorkom het overschrijven met een lege lijst bij opstarten
+      
+      fetch('http://localhost:3001/api/bots', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(bots)
+      }).catch(err => console.error("Kon bots niet opslaan:", err));
+    }, [bots]);
 
   const saveSettings = () => {
       localStorage.setItem('trading_api_keys', JSON.stringify(apiKeys));

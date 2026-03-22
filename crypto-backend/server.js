@@ -267,6 +267,44 @@ app.post('/api/cancel-order', requireAuth, async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message || 'Fout bij annuleren order' }); }
 });
 
+const fs = require('fs');
+const path = require('path');
+
+const BOTS_FILE = path.join(__dirname, 'bots_data.json');
+
+// Hulpfunctie om bots te laden van schijf
+const loadBotsFromFile = () => {
+    try {
+        if (fs.existsSync(BOTS_FILE)) {
+            const data = fs.readFileSync(BOTS_FILE, 'utf8');
+            return JSON.parse(data);
+        }
+    } catch (err) {
+        console.error("Fout bij lezen van bots_data.json:", err);
+    }
+    return [];
+};
+
+// Initialiseer de lijst bij het opstarten van de server
+let globalBots = loadBotsFromFile();
+
+// Endpoint om de lijst met bots op te vragen
+app.get('/api/bots', (req, res) => {
+    res.json(globalBots);
+});
+
+// Endpoint om de lijst met bots bij te werken en op te slaan
+app.post('/api/bots', (req, res) => {
+    globalBots = req.body;
+    try {
+        fs.writeFileSync(BOTS_FILE, JSON.stringify(globalBots, null, 2));
+        res.json({ success: true });
+    } catch (err) {
+        console.error("Fout bij schrijven naar bots_data.json:", err);
+        res.status(500).json({ error: "Kon bots niet opslaan op schijf" });
+    }
+});
+
 const PORT = 3001;
 app.listen(PORT, () => {
     console.log(`====================================================`);
