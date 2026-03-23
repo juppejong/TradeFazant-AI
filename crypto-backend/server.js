@@ -49,7 +49,7 @@ const processQueue = async () => {
     const secretToUse = apiSecret || KRAKEN_API_SECRET;
 
     if (!keyToUse || !secretToUse) {
-        reject({ message: "API Keys ontbreken. Vul deze in bij de settings." });
+        reject({ message: "API Keys missing. Please enter them in settings." });
         isRequestPending = false;
         setTimeout(processQueue, 200);
         return;
@@ -107,7 +107,7 @@ app.post('/api/pairs', requireAuth, async (req, res) => {
         pairsCache = response.data;
         pairsCacheTime = Date.now();
         res.json(response.data);
-    } catch (err) { res.status(500).json({ error: 'Fout bij ophalen paren' }); }
+    } catch (err) { res.status(500).json({ error: 'Error fetching pairs' }); }
 });
 
 app.post('/api/ohlc', requireAuth, async (req, res) => {
@@ -115,7 +115,7 @@ app.post('/api/ohlc', requireAuth, async (req, res) => {
         const { pair, interval } = req.body;
         const response = await axios.get(`${KRAKEN_API_URL}/0/public/OHLC?pair=${pair}&interval=${interval}`);
         res.json(response.data);
-    } catch (err) { res.status(500).json({ error: 'Fout bij ophalen OHLC' }); }
+    } catch (err) { res.status(500).json({ error: 'Error fetching OHLC' }); }
 });
 
 app.post('/api/ticker', requireAuth, async (req, res) => {
@@ -123,7 +123,7 @@ app.post('/api/ticker', requireAuth, async (req, res) => {
         const { pair } = req.body;
         const response = await axios.get(`${KRAKEN_API_URL}/0/public/Ticker?pair=${pair}`);
         res.json(response.data);
-    } catch (err) { res.status(500).json({ error: 'Fout bij ophalen Ticker' }); }
+    } catch (err) { res.status(500).json({ error: 'Error fetching Ticker' }); }
 });
 
 app.post('/api/depth', requireAuth, async (req, res) => {
@@ -131,28 +131,31 @@ app.post('/api/depth', requireAuth, async (req, res) => {
         const { pair, count } = req.body;
         const response = await axios.get(`${KRAKEN_API_URL}/0/public/Depth?pair=${pair}&count=${count || 15}`);
         res.json(response.data);
-    } catch (err) { res.status(500).json({ error: 'Fout bij ophalen Depth' }); }
+    } catch (err) { res.status(500).json({ error: 'Error fetching Depth' }); }
 });
 
 // ==========================================
-// 🤖 AI ENDPOINTS (Auto-Tune & Chat & Analyze)
+// 🤖 AI ENDPOINTS (Chat, Analyze, Tune)
 // ==========================================
 app.post('/api/chat', requireAuth, async (req, res) => {
     try {
         const geminiKey = req.headers['x-gemini-api-key'] || GEMINI_API_KEY;
         const { message } = req.body;
-        if (!geminiKey) return res.status(400).json({ error: "Gemini API key ontbreekt in instellingen." });
+        if (!geminiKey) return res.status(400).json({ error: "Gemini API key missing in settings." });
 
         const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`;
-        const sysPrompt = "Je bent een expert crypto quant trader. Antwoord altijd in het Nederlands. Wees to-the-point.";
+        
+        // 🛠️ FIX: Systeeminstructie aangepast van Nederlands naar Engels
+        const sysPrompt = "You are an expert crypto quant trader. Always respond in English. Be concise, professional, and data-driven.";
+        
         const payload = { contents: [{ parts: [{ text: message }] }], systemInstruction: { parts: [{ text: sysPrompt }] } };
 
         const response = await axios.post(url, payload, { headers: { 'Content-Type': 'application/json' } });
-        const text = response.data.candidates?.[0]?.content?.parts?.[0]?.text || "Geen antwoord.";
+        const text = response.data.candidates?.[0]?.content?.parts?.[0]?.text || "No response generated.";
         res.json({ text });
     } catch (err) { 
         console.error("🔥 Gemini Chat Error:", err.response ? JSON.stringify(err.response.data, null, 2) : err.message);
-        res.status(500).json({ error: "Fout bij communicatie met AI." }); 
+        res.status(500).json({ error: "Communication failure with AI advisor." }); 
     }
 });
 
@@ -160,23 +163,23 @@ app.post('/api/ai/analyze', requireAuth, async (req, res) => {
     try {
         const geminiKey = req.headers['x-gemini-api-key'] || GEMINI_API_KEY;
         const { pair, timeframe, data } = req.body;
-        if (!geminiKey) return res.status(400).json({ error: "Gemini API key ontbreekt" });
+        if (!geminiKey) return res.status(400).json({ error: "Gemini API key missing" });
 
         const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`;
-        const sysPrompt = "Je bent een kwantitatieve trading AI. Analyseer de OHLC data. Je antwoord moet UITSLUITEND uit een JSON object bestaan. Formaat: {\"bias\": \"BULLISH\"|\"BEARISH\"|\"NEUTRAL\", \"confidence\": getal_tussen_0_en_100, \"advice\": \"TRADE\"|\"NO_TRADE\", \"reasoning\": \"korte_verklaring\"}";
-        const prompt = `Analyseer dit muntpaar: ${pair} op timeframe: ${timeframe}\nData:\n${data}`;
+        
+        // 🛠️ FIX: Systeeminstructie aangepast naar Engels
+        const sysPrompt = "You are a quantitative trading AI. Analyze OHLC data. Your response MUST be EXCLUSIVELY a JSON object. Format: {\"bias\": \"BULLISH\"|\"BEARISH\"|\"NEUTRAL\", \"confidence\": number_0_to_100, \"advice\": \"TRADE\"|\"NO_TRADE\", \"reasoning\": \"short_explanation_in_english\"}";
+        const prompt = `Analyze this pair: ${pair} on timeframe: ${timeframe}\nData:\n${data}`;
         
         const payload = { contents: [{ parts: [{ text: prompt }] }], systemInstruction: { parts: [{ text: sysPrompt }] }, generationConfig: { responseMimeType: "application/json" } };
 
         const response = await axios.post(url, payload, { headers: { 'Content-Type': 'application/json' } });
         let text = response.data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
-        
-        // FIX: Verwijder eventuele markdown codeblok-tags (```json en ```) die Gemini soms meestuurt
         text = text.replace(/```json/gi, '').replace(/```/g, '').trim();
         
         res.json(JSON.parse(text));
     } catch (err) {
-        res.status(500).json({ error: "AI Analyse mislukt", bias: "NEUTRAL", confidence: 0, advice: "NO_TRADE", reasoning: "Fout bij ophalen." });
+        res.status(500).json({ error: "AI Analysis failed", bias: "NEUTRAL", confidence: 0, advice: "NO_TRADE", reasoning: "Fetch error." });
     }
 });
 
@@ -184,22 +187,22 @@ app.post('/api/ai/tune', requireAuth, async (req, res) => {
     try {
         const geminiKey = req.headers['x-gemini-api-key'] || GEMINI_API_KEY;
         const { pair, timeframe, strategy, data } = req.body;
-        if (!geminiKey) return res.status(400).json({ error: "Geen API key" });
+        if (!geminiKey) return res.status(400).json({ error: "No API key" });
         
         const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`;
-        const sysPrompt = `Je bent een expert kwantitatieve trading AI. Genereer optimale parameters voor de ${strategy} strategie. Geef UITSLUITEND JSON: {"rsiPeriod": number, "rsiBuyLevel": number, "rsiSellLevel": number, "trailingPct": number, "slPct": number, "tpPct": number}`;
-        const prompt = `Paar: ${pair}\nTF: ${timeframe}\nData:\n${data}`;
+        
+        // 🛠️ FIX: Systeeminstructie aangepast naar Engels
+        const sysPrompt = `You are an expert quantitative trading AI. Generate optimal parameters for the ${strategy} strategy based on historical data. Return ONLY valid JSON: {"rsiPeriod": number, "rsiBuyLevel": number, "rsiSellLevel": number, "trailingPct": number, "slPct": number, "tpPct": number}`;
+        const prompt = `Asset: ${pair}\nTimeframe: ${timeframe}\nData context:\n${data}`;
         
         const payload = { contents: [{ parts: [{ text: prompt }] }], systemInstruction: { parts: [{ text: sysPrompt }] }, generationConfig: { responseMimeType: "application/json" } };
         
         const response = await axios.post(url, payload, { headers: { 'Content-Type': 'application/json' } });
         let text = response.data.candidates[0].content.parts[0].text;
-        
-        // FIX: Verwijder eventuele markdown codeblok-tags
         text = text.replace(/```json/gi, '').replace(/```/g, '').trim();
         
         res.json(JSON.parse(text));
-    } catch(err) { res.status(500).json({error: "Tuning mislukt"}); }
+    } catch(err) { res.status(500).json({error: "Tuning process failed"}); }
 });
 
 // ==========================================
@@ -212,7 +215,7 @@ app.post('/api/balance', requireAuth, async (req, res) => {
         const data = await krakenPrivateApi('Balance', {}, 3, apiKey, apiSecret);
         if (data.error && data.error.length > 0) return res.status(400).json({ error: data.error });
         res.json(data.result);
-    } catch (err) { res.status(500).json({ error: err.message || 'Fout bij ophalen balans' }); }
+    } catch (err) { res.status(500).json({ error: err.message || 'Error fetching balance' }); }
 });
 
 app.post('/api/order', requireAuth, async (req, res) => {
@@ -238,7 +241,7 @@ app.post('/api/order', requireAuth, async (req, res) => {
         const data = await krakenPrivateApi('AddOrder', payload, 3, apiKey, apiSecret);
         if (data.error && data.error.length > 0) return res.status(400).json({ error: data.error.join(', ') });
         res.json(data.result);
-    } catch (err) { res.status(500).json({ error: err.message || 'Fout bij plaatsen order.' }); }
+    } catch (err) { res.status(500).json({ error: err.message || 'Error executing order.' }); }
 });
 
 app.post('/api/orders', requireAuth, async (req, res) => {
@@ -246,14 +249,12 @@ app.post('/api/orders', requireAuth, async (req, res) => {
         const apiKey = req.headers['x-kraken-api-key'];
         const apiSecret = req.headers['x-kraken-api-secret'];
         const openOrders = await krakenPrivateApi('OpenOrders', {}, 3, apiKey, apiSecret);
-        const closedOrders = await krakenPrivateApi('ClosedOrders', {}, 3, apiKey, apiSecret);
         const tradesHistory = await krakenPrivateApi('TradesHistory', {}, 3, apiKey, apiSecret);
         res.json({ 
             open: openOrders.result?.open || {}, 
-            closed: closedOrders.result?.closed || {},
             trades: tradesHistory.result?.trades || {}
         });
-    } catch (err) { res.status(500).json({ error: err.message || 'Fout bij ophalen order historie' }); }
+    } catch (err) { res.status(500).json({ error: err.message || 'Error fetching order history' }); }
 });
 
 app.post('/api/cancel-order', requireAuth, async (req, res) => {
@@ -264,7 +265,7 @@ app.post('/api/cancel-order', requireAuth, async (req, res) => {
         const data = await krakenPrivateApi('CancelOrder', { txid }, 3, apiKey, apiSecret); 
         if (data.error && data.error.length > 0) return res.status(400).json({ error: data.error });
         res.json({ success: true, result: data.result });
-    } catch (err) { res.status(500).json({ error: err.message || 'Fout bij annuleren order' }); }
+    } catch (err) { res.status(500).json({ error: err.message || 'Error cancelling order' }); }
 });
 
 const fs = require('fs');
@@ -272,7 +273,6 @@ const path = require('path');
 
 const BOTS_FILE = path.join(__dirname, 'bots_data.json');
 
-// Hulpfunctie om bots te laden van schijf
 const loadBotsFromFile = () => {
     try {
         if (fs.existsSync(BOTS_FILE)) {
@@ -280,35 +280,32 @@ const loadBotsFromFile = () => {
             return JSON.parse(data);
         }
     } catch (err) {
-        console.error("Fout bij lezen van bots_data.json:", err);
+        console.error("Error reading bots_data.json:", err);
     }
     return [];
 };
 
-// Initialiseer de lijst bij het opstarten van de server
 let globalBots = loadBotsFromFile();
 
-// Endpoint om de lijst met bots op te vragen
 app.get('/api/bots', (req, res) => {
     res.json(globalBots);
 });
 
-// Endpoint om de lijst met bots bij te werken en op te slaan
 app.post('/api/bots', (req, res) => {
     globalBots = req.body;
     try {
         fs.writeFileSync(BOTS_FILE, JSON.stringify(globalBots, null, 2));
         res.json({ success: true });
     } catch (err) {
-        console.error("Fout bij schrijven naar bots_data.json:", err);
-        res.status(500).json({ error: "Kon bots niet opslaan op schijf" });
+        console.error("Error writing to bots_data.json:", err);
+        res.status(500).json({ error: "Could not persist bots to disk" });
     }
 });
 
 const PORT = 3001;
 app.listen(PORT, () => {
     console.log(`====================================================`);
-    console.log(`🚀 Crypto Backend draait op poort ${PORT}`);
-    console.log(`🛡️ Dynamische API Keys via Headers Geactiveerd!`);
+    console.log(`🚀 Crypto Backend active on port ${PORT}`);
+    console.log(`🛡️ AI & Private endpoints switched to English mode`);
     console.log(`====================================================`);
 });

@@ -5,11 +5,12 @@ import { tfMap, getApiHeaders, fetchKrakenPairs, fetchKrakenOHLC } from './utils
 import PortfolioView from './components/PortfolioView';
 import AiAdvisorView from './components/AiAdvisorView';
 import BotManagerView from './components/BotManagerView';
+import ScreenerView from './components/ScreenerView'; // ✅ Toegevoegd
 import { useKrakenMarketData } from './utils/websocket';
 import TradingChart, { PopoutWindow } from './components/TradingChart';
 import { 
   Settings, BarChart2, Activity, Layers, ChevronDown, LineChart, Bot, Wallet, 
-  Maximize2, Search, User, LayoutGrid, Square, ExternalLink, 
+  Maximize2, Search, User, LayoutGrid, Square, ExternalLink, Zap, // ✅ Zap toegevoegd
   ChevronRight, ChevronLeft, Sparkles, Send, X, Trash2, Plus, Play, Pause, Crosshair,
   ShieldAlert, Target, TrendingUp, AlertTriangle, Clock, ArrowDownToLine, KeyRound
 } from 'lucide-react';
@@ -60,7 +61,7 @@ export default function TradingDashboard() {
   
   const [useSL, setUseSL] = useState(false); const [slInput, setSlInput] = useState('');
   const [useTP, setUseTP] = useState(false); const [tpInput, setTpInput] = useState('');
-  
+
   const { currentPrice, orderBook } = useKrakenMarketData(activePair?.wsname);
 
   const [priceInput, setPriceInput] = useState('');
@@ -215,38 +216,38 @@ export default function TradingDashboard() {
           }
 
           if (buySignal) {
-             let volumeToBuyRaw = 0;
-             if (cfg.sizingType === 'percent') {
-                 const availableQuote = currentBalances[updatedBot.pair.quote] || 0;
-                 volumeToBuyRaw = (availableQuote * (cfg.tradePercent / 100)) / botCurrentClose;
-             } else { volumeToBuyRaw = cfg.tradeAmount; }
-             
-             const volumeToBuy = Number(volumeToBuyRaw.toFixed(8));
-             
-             if (volumeToBuy > 0) {
-                 updatedBot.logs = [...updatedBot.logs, { time: new Date().toLocaleTimeString(), msg: `⏳ Verifying Buy Order: ${volumeToBuy} ${updatedBot.pair.base}...`, type: 'info' }].slice(-50);
-                 hasUpdates = true;
-                 try {
-                     const response = await fetch('http://localhost:3001/api/order', { 
-                         method: 'POST', headers: getApiHeaders(), 
-                         body: JSON.stringify({ pair: updatedBot.pair.altname, type: 'buy', ordertype: 'market', volume: volumeToBuy }) 
-                     });
-                     const apiData = await response.json();
-                     if (apiData.error) {
-                         updatedBot.logs.push({ time: new Date().toLocaleTimeString(), msg: `❌ BUY REJECTED: ${apiData.error}`, type: 'error' });
-                     } else {
-                         updatedBot.logs.push({ time: new Date().toLocaleTimeString(), msg: `✅ BUY SUCCESSFUL @ $${botCurrentClose.toFixed(2)}`, type: 'buy' });
-                         state.lastAction = 'BUY'; state.lastTradeTime = nowMs;
-                         const oldTotalValue = state.totalVolume * state.averageEntryPrice;
-                         const newTotalValue = oldTotalValue + (volumeToBuy * botCurrentClose);
-                         state.totalVolume += volumeToBuy; state.averageEntryPrice = newTotalValue / state.totalVolume; state.currentEntries += 1;
-                         
-                         const newTrade = { id: 'bot-' + Date.now(), time: Math.floor(nowMs / 1000), date: new Date(nowMs).toLocaleString([], {month: 'short', day: '2-digit', hour: '2-digit', minute:'2-digit'}), pair: updatedBot.pair.display, type: 'market', side: 'Long', price: botCurrentClose, amount: volumeToBuy, fee: 0, cost: volumeToBuy * botCurrentClose, pnl: 0 };
-                         setTradeHistory(prev => [newTrade, ...prev]); setPositions(prev => [...prev, newTrade]);
-                         if (fetchOrdersRef.current) setTimeout(fetchOrdersRef.current, 2000);
-                     }
-                 } catch (err) { updatedBot.logs.push({ time: new Date().toLocaleTimeString(), msg: `❌ SERVER ERROR: Buy failed.`, type: 'error' }); }
-             }
+              let volumeToBuyRaw = 0;
+              if (cfg.sizingType === 'percent') {
+                  const availableQuote = currentBalances[updatedBot.pair.quote] || 0;
+                  volumeToBuyRaw = (availableQuote * (cfg.tradePercent / 100)) / botCurrentClose;
+              } else { volumeToBuyRaw = cfg.tradeAmount; }
+              
+              const volumeToBuy = Number(volumeToBuyRaw.toFixed(8));
+              
+              if (volumeToBuy > 0) {
+                  updatedBot.logs = [...updatedBot.logs, { time: new Date().toLocaleTimeString(), msg: `⏳ Verifying Buy Order: ${volumeToBuy} ${updatedBot.pair.base}...`, type: 'info' }].slice(-50);
+                  hasUpdates = true;
+                  try {
+                      const response = await fetch('http://localhost:3001/api/order', { 
+                          method: 'POST', headers: getApiHeaders(), 
+                          body: JSON.stringify({ pair: updatedBot.pair.altname, type: 'buy', ordertype: 'market', volume: volumeToBuy }) 
+                      });
+                      const apiData = await response.json();
+                      if (apiData.error) {
+                          updatedBot.logs.push({ time: new Date().toLocaleTimeString(), msg: `❌ BUY REJECTED: ${apiData.error}`, type: 'error' });
+                      } else {
+                          updatedBot.logs.push({ time: new Date().toLocaleTimeString(), msg: `✅ BUY SUCCESSFUL @ $${botCurrentClose.toFixed(2)}`, type: 'buy' });
+                          state.lastAction = 'BUY'; state.lastTradeTime = nowMs;
+                          const oldTotalValue = state.totalVolume * state.averageEntryPrice;
+                          const newTotalValue = oldTotalValue + (volumeToBuy * botCurrentClose);
+                          state.totalVolume += volumeToBuy; state.averageEntryPrice = newTotalValue / state.totalVolume; state.currentEntries += 1;
+                          
+                          const newTrade = { id: 'bot-' + Date.now(), time: Math.floor(nowMs / 1000), date: new Date(nowMs).toLocaleString([], {month: 'short', day: '2-digit', hour: '2-digit', minute:'2-digit'}), pair: updatedBot.pair.display, type: 'market', side: 'Long', price: botCurrentClose, amount: volumeToBuy, fee: 0, cost: volumeToBuy * botCurrentClose, pnl: 0 };
+                          setTradeHistory(prev => [newTrade, ...prev]); setPositions(prev => [...prev, newTrade]);
+                          if (fetchOrdersRef.current) setTimeout(fetchOrdersRef.current, 2000);
+                      }
+                  } catch (err) { updatedBot.logs.push({ time: new Date().toLocaleTimeString(), msg: `❌ SERVER ERROR: Buy failed.`, type: 'error' }); }
+              }
           } 
           else if (sellSignal && state.totalVolume > 0) {
              const volToSell = Number(state.totalVolume.toFixed(8));
@@ -477,6 +478,27 @@ export default function TradingDashboard() {
       }));
   }, [currentPrice, activePair]);
 
+  // ✨ NIEUW: Logica om een bot te starten vanuit de Screener
+  const handleDeployFromScreener = (coin) => {
+    const newBot = { 
+      id: Math.random().toString(), 
+      pair: { id: coin.id, altname: coin.alt, display: coin.display, wsname: coin.display.replace('USD', '/USD') }, 
+      strategy: 'RSI_TREND', 
+      isRunning: false, 
+      state: { phase: 'WAITING', currentPrice: coin.price, lastAction: 'NONE', averageEntryPrice: 0, totalVolume: 0, livePnl: 0, livePnlPct: 0, consecutiveLosses: 0 }, 
+      stats: { trades: [], winCount: 0, lossCount: 0, grossProfit: 0, grossLoss: 0 },
+      logs: [{time: new Date().toLocaleTimeString(), msg: `🚀 Bot created via Screener for ${coin.display}`, type: 'success'}], 
+      config: { 
+          timeframe: '15m', sizingType: 'percent', tradePercent: 10,
+          slPct: 3.0, tpPct: 6.0, useTrailing: true, trailingPct: 0.5,
+          rsiPeriod: 14, rsiBuyLevel: 30, rsiSellLevel: 70,
+          cooldownMins: 15
+      }
+    };
+    setBots(prev => [...prev, newBot]);
+    setCurrentView('bots');
+  };
+
   const renderTableBody = () => {
     const isOpenOrdersTab = activeTab.includes('open'); const isHistoryTab = activeTab.includes('trade');
     const data = isOpenOrdersTab ? openOrders : (isHistoryTab ? tradeHistory : positions);
@@ -503,26 +525,26 @@ export default function TradingDashboard() {
       {showSettings && (
         <div className="fixed inset-0 bg-black/80 z-[100] flex items-center justify-center backdrop-blur-sm">
           <div className="bg-[#0b0e11] border border-zinc-800 p-6 rounded-2xl w-[400px] shadow-2xl">
-             <div className="flex justify-between items-center mb-6">
-               <h3 className="text-white font-bold flex items-center gap-2"><KeyRound size={18} className="text-blue-500"/> API Settings</h3>
-               <button onClick={() => setShowSettings(false)} className="text-zinc-500 hover:text-rose-500"><X size={20}/></button>
-             </div>
-             <div className="space-y-4">
-               <div className="space-y-1">
-                 <label className="text-[10px] uppercase text-zinc-500 font-bold">Kraken API Key</label>
-                 <input type="text" value={apiKeys.krakenKey} onChange={e => setApiKeys({...apiKeys, krakenKey: e.target.value})} className="w-full bg-[#050505] border border-zinc-800 rounded p-2 text-sm text-white outline-none focus:border-blue-500" placeholder="Leave blank for backend default" />
-               </div>
-               <div className="space-y-1">
-                 <label className="text-[10px] uppercase text-zinc-500 font-bold">Kraken API Secret</label>
-                 <input type="password" value={apiKeys.krakenSecret} onChange={e => setApiKeys({...apiKeys, krakenSecret: e.target.value})} className="w-full bg-[#050505] border border-zinc-800 rounded p-2 text-sm text-white outline-none focus:border-blue-500" placeholder="Leave blank for backend default" />
-               </div>
-               <div className="h-px bg-zinc-800/50 my-2"></div>
-               <div className="space-y-1">
-                 <label className="text-[10px] uppercase text-zinc-500 font-bold">Gemini API Key (Optional for AI)</label>
-                 <input type="password" value={apiKeys.geminiKey} onChange={e => setApiKeys({...apiKeys, geminiKey: e.target.value})} className="w-full bg-[#050505] border border-zinc-800 rounded p-2 text-sm text-white outline-none focus:border-blue-500" placeholder="Leave blank for backend default" />
-               </div>
-               <button onClick={saveSettings} className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white text-sm font-bold rounded-xl transition mt-4 active:scale-95">Save & Restart</button>
-             </div>
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-white font-bold flex items-center gap-2"><KeyRound size={18} className="text-blue-500"/> API Settings</h3>
+                <button onClick={() => setShowSettings(false)} className="text-zinc-500 hover:text-rose-500"><X size={20}/></button>
+              </div>
+              <div className="space-y-4">
+                <div className="space-y-1">
+                  <label className="text-[10px] uppercase text-zinc-500 font-bold">Kraken API Key</label>
+                  <input type="text" value={apiKeys.krakenKey} onChange={e => setApiKeys({...apiKeys, krakenKey: e.target.value})} className="w-full bg-[#050505] border border-zinc-800 rounded p-2 text-sm text-white outline-none focus:border-blue-500" placeholder="Leave blank for backend default" />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] uppercase text-zinc-500 font-bold">Kraken API Secret</label>
+                  <input type="password" value={apiKeys.krakenSecret} onChange={e => setApiKeys({...apiKeys, krakenSecret: e.target.value})} className="w-full bg-[#050505] border border-zinc-800 rounded p-2 text-sm text-white outline-none focus:border-blue-500" placeholder="Leave blank for backend default" />
+                </div>
+                <div className="h-px bg-zinc-800/50 my-2"></div>
+                <div className="space-y-1">
+                  <label className="text-[10px] uppercase text-zinc-500 font-bold">Gemini API Key (Optional for AI)</label>
+                  <input type="password" value={apiKeys.geminiKey} onChange={e => setApiKeys({...apiKeys, geminiKey: e.target.value})} className="w-full bg-[#050505] border border-zinc-800 rounded p-2 text-sm text-white outline-none focus:border-blue-500" placeholder="Leave blank for backend default" />
+                </div>
+                <button onClick={saveSettings} className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white text-sm font-bold rounded-xl transition mt-4 active:scale-95">Save & Restart</button>
+              </div>
           </div>
         </div>
       )}
@@ -537,10 +559,18 @@ export default function TradingDashboard() {
 
       <nav className="w-14 bg-[#09090b] border-r border-zinc-800 flex flex-col items-center py-4 space-y-6 z-10 shrink-0">
         <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center mb-4 shadow-lg shadow-blue-500/20"><Activity size={20} className="text-white" /></div>
+        
         <button onClick={() => setCurrentView('charts')} className={`p-2 rounded-lg transition ${currentView === 'charts' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/30' : 'text-zinc-500 hover:text-zinc-300'}`} title="Charts"><LineChart size={20} /></button>
+        
+        {/* ✨ NIEUWE KNOP: SCREENER */}
+        <button onClick={() => setCurrentView('screener')} className={`p-2 rounded-lg transition ${currentView === 'screener' ? 'bg-yellow-600 text-white shadow-lg shadow-yellow-500/30' : 'text-zinc-500 hover:text-zinc-300'}`} title="Market Screener"><Zap size={20} /></button>
+        
         <button onClick={() => setCurrentView('ai')} className={`p-2 rounded-lg transition ${currentView === 'ai' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/30' : 'text-zinc-500 hover:text-zinc-300'}`} title="Gemini AI"><Sparkles size={20} /></button>
+        
         <button onClick={() => setCurrentView('portfolio')} className={`p-2 rounded-lg transition ${currentView === 'portfolio' ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-500/30' : 'text-zinc-500 hover:text-zinc-300'}`} title="Portfolio"><Wallet size={20} /></button>
+        
         <button onClick={() => setCurrentView('bots')} className={`p-2 rounded-lg transition mt-4 ${currentView === 'bots' ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/30' : 'text-zinc-500 hover:text-zinc-300'}`} title="Bot Manager"><Bot size={20} /></button>
+        
         <div className="flex-1"></div>
         <button onClick={() => setShowSettings(true)} className="p-2 text-zinc-500 hover:text-zinc-300" title="API Settings"><Settings size={20} /></button>
       </nav>
@@ -578,6 +608,8 @@ export default function TradingDashboard() {
           </div>
         </header>
 
+        {/* --- VIEW SWITCHER --- */}
+        {currentView === 'screener' && <ScreenerView onDeployBot={handleDeployFromScreener} />}
         {currentView === 'ai' && <AiAdvisorView activePair={activePair} aiMessages={aiMessages} setAiMessages={setAiMessages} timeframe={timeframe} />}
         {currentView === 'portfolio' && <PortfolioView balances={balances} scriptLoaded={scriptLoaded} equityCurve={equityCurve} onRefresh={fetchBalances} tradeHistory={tradeHistory} />}
         {currentView === 'bots' && <BotManagerView bots={bots} setBots={setBots} availablePairs={availablePairs} activePair={activePair} />}
@@ -674,7 +706,7 @@ export default function TradingDashboard() {
                     </div>
                     <div className="py-2 border-y border-zinc-800 flex items-center justify-center bg-zinc-900/50 font-bold text-emerald-500">${formatPrice(currentPrice)}</div>
                     <div className="flex-1 overflow-y-auto">
-                      {orderBook.bids.map((bid, i) => (<div key={`bid-${i}`} className="relative flex justify-between px-3 py-0.5 hover:bg-zinc-800/50 cursor-pointer" onClick={() => setPriceInput(bid.price.toString())}><div className="absolute right-0 top-0 bottom-0 bg-emerald-500/10" style={{ width: `${bid.depth}%` }}></div><span className="w-1/2 text-emerald-500 z-10">{formatPrice(bid.price)}</span><span className="w-1/2 text-right text-zinc-300 z-10">{bid.volume.toFixed(3)}</span></div>))}
+                      {orderBook.bids.map((bid, i) => (<div key={`bid-${i}`} className="relative flex justify-between px-3 py-0.5 hover:bg-zinc-800/50 cursor-pointer" onClick={() => setPriceInput(bid.price.toString())}><div className="absolute right-0 top-0 bottom-0 bg-emerald-500/10" style={{ width: `${bid.depth}%` }}></div><span className="w-1/2 text-emerald-500 z-10">{formatPrice(bid.price)}</span><span className="text-zinc-200 z-10">{bid.volume.toFixed(3)}</span></div>))}
                     </div>
                   </div>
                 </div>

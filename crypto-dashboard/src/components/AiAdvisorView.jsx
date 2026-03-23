@@ -1,7 +1,119 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Sparkles, Activity, Layers, Send, TrendingUp, X, Cpu, Zap } from 'lucide-react';
-import { getApiHeaders, fetchKrakenOHLC } from '../utils/api';
-import { calculateRSI, calculateMACD, calculateSMA } from '../utils/indicators';
+
+// ==========================================
+// 🛠️ INLINED UTILS (Ter vervanging van falende imports)
+// ==========================================
+
+const getApiHeaders = () => {
+  let keys = { krakenKey: '', krakenSecret: '', geminiKey: '' };
+  try {
+    const stored = localStorage.getItem('trading_api_keys');
+    if (stored) keys = JSON.parse(stored);
+  } catch (e) {}
+  return {
+    'Content-Type': 'application/json',
+    'x-kraken-api-key': keys.krakenKey || '',
+    'x-kraken-api-secret': keys.krakenSecret || '',
+    'x-gemini-api-key': keys.geminiKey || ''
+  };
+};
+
+const fetchKrakenOHLC = async (interval, pairAltname) => {
+  try {
+    const res = await fetch('http://localhost:3001/api/ohlc', {
+      method: 'POST', 
+      headers: getApiHeaders(), 
+      body: JSON.stringify({ pair: pairAltname, interval })
+    });
+    const json = await res.json();
+    if (!json.result) return [];
+    const pairKey = Object.keys(json.result).find(k => k !== 'last');
+    return json.result[pairKey].map(d => ({
+      time: d[0], open: parseFloat(d[1]), high: parseFloat(d[2]), low: parseFloat(d[3]), close: parseFloat(d[4]), volume: parseFloat(d[6])
+    }));
+  } catch (error) { return []; }
+};
+
+const calculateSMA = (data, period, source = 'close') => {
+  const smaData = [];
+  if (data.length < period) return [];
+  for (let i = 0; i < data.length; i++) {
+    if (i < period - 1) continue;
+    let sum = 0; for (let j = 0; j < period; j++) sum += data[i - j][source];
+    smaData.push({ time: data[i].time, value: sum / period });
+  }
+  return smaData;
+};
+
+const calculateEMA = (data, period) => {
+  const emaData = [];
+  if (data.length < period) return emaData;
+  const multiplier = 2 / (period + 1);
+  let prevEma = data.slice(0, period).reduce((acc, val) => acc + (val.close || 0), 0) / period;
+  emaData.push({ time: data[period - 1].time, value: prevEma });
+  for (let i = period; i < data.length; i++) {
+    const val = data[i].close;
+    const ema = (val - prevEma) * multiplier + prevEma;
+    emaData.push({ time: data[i].time, value: ema });
+    prevEma = ema;
+  }
+  return emaData;
+};
+
+const calculateMACD = (data, fastPeriod = 12, slowPeriod = 26, signalPeriod = 9) => {
+  const fastEma = calculateEMA(data, fastPeriod);
+  const slowEma = calculateEMA(data, slowPeriod);
+  if (!fastEma.length || !slowEma.length) return [];
+  
+  const macdMap = new Map();
+  slowEma.forEach(e => macdMap.set(e.time, { slow: e.value }));
+  fastEma.forEach(e => { if (macdMap.has(e.time)) macdMap.get(e.time).fast = e.value; });
+  
+  const macdOutput = []; const macdForSignal = [];
+  data.forEach(d => {
+      const vals = macdMap.get(d.time);
+      if (vals && vals.fast !== undefined && vals.slow !== undefined) {
+          const val = vals.fast - vals.slow;
+          macdOutput.push({ time: d.time, value: val });
+          macdForSignal.push({ time: d.time, close: val });
+      }
+  });
+  
+  const signalLine = calculateEMA(macdForSignal, signalPeriod);
+  const signalMap = new Map(); signalLine.forEach(s => signalMap.set(s.time, s.value));
+  const finalOutput = [];
+  macdOutput.forEach(m => {
+      const sig = signalMap.get(m.time);
+      if (sig !== undefined) finalOutput.push({ time: m.time, macd: m.value, signal: sig, histogram: m.value - sig });
+  });
+  return finalOutput;
+};
+
+const calculateRSI = (data, period = 14) => {
+  const rsiData = [];
+  if (data.length <= period) return rsiData;
+  let avgGain = 0, avgLoss = 0;
+  for (let i = 1; i <= period; i++) {
+    const change = data[i].close - data[i - 1].close;
+    if (change > 0) avgGain += change; else avgLoss -= change;
+  }
+  avgGain /= period; avgLoss /= period;
+  rsiData.push({ time: data[period].time, value: avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss)) });
+  for (let i = period + 1; i < data.length; i++) {
+    const change = data[i].close - data[i - 1].close;
+    const gain = change > 0 ? change : 0; const loss = change < 0 ? -change : 0;
+    avgGain = (avgGain * (period - 1) + gain) / period;
+    avgLoss = (avgLoss * (period - 1) + loss) / period;
+    let rs = avgGain / avgLoss;
+    rsiData.push({ time: data[i].time, value: avgLoss === 0 ? 100 : 100 - (100 / (1 + rs)) });
+  }
+  return rsiData;
+};
+
+// ==========================================
+// 🟢 AI ADVISOR VIEW COMPONENT
+// ==========================================
 
 const AiAdvisorView = ({ activePair, aiMessages, setAiMessages, timeframe }) => {
   const [input, setInput] = useState('');
@@ -21,7 +133,6 @@ const AiAdvisorView = ({ activePair, aiMessages, setAiMessages, timeframe }) => 
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [aiMessages, isLoading]);
 
-  // ✨ FIXED: Smart Markdown Formatter for beautiful chat messages
   const formatMessage = (text) => {
     if (!text) return null;
     const lines = text.split('\n');
@@ -29,13 +140,11 @@ const AiAdvisorView = ({ activePair, aiMessages, setAiMessages, timeframe }) => 
       let isBullet = false;
       let contentStr = line;
 
-      // Filter bullet points first before splitting text
       if (line.trim().startsWith('* ') || line.trim().startsWith('- ')) {
         isBullet = true;
         contentStr = line.trim().substring(2);
       }
 
-      // Handle bold text (**text**)
       const parts = contentStr.split(/(\*\*.*?\*\*)/g);
       const formattedLine = parts.map((part, j) => {
         if (part.startsWith('**') && part.endsWith('**')) {
@@ -44,7 +153,6 @@ const AiAdvisorView = ({ activePair, aiMessages, setAiMessages, timeframe }) => 
         return <span key={j}>{part}</span>;
       });
 
-      // Render bullet points properly
       if (isBullet) {
         return <li key={i} className="ml-4 list-disc marker:text-blue-500 mt-1">{formattedLine}</li>;
       }
@@ -60,7 +168,6 @@ const AiAdvisorView = ({ activePair, aiMessages, setAiMessages, timeframe }) => 
     setIsLoading(true);
     
     try {
-      // 🧠 NEW: Context-Aware Chat (Fetch live data to inject into prompt secretly)
       let contextStr = "";
       try {
           const recentData = await fetchKrakenOHLC(15, activePair.altname);
@@ -68,9 +175,11 @@ const AiAdvisorView = ({ activePair, aiMessages, setAiMessages, timeframe }) => 
               const last = recentData[recentData.length - 1];
               const rsiVals = calculateRSI(recentData, 14);
               const rsi = rsiVals.length ? rsiVals[rsiVals.length-1].value.toFixed(1) : 'Unknown';
-              contextStr = `\n\n[SYSTEM CONTEXT: The user is currently looking at ${activePair.display}. Current Price: $${last.close.toFixed(4)}. 15m RSI: ${rsi}. Please take this live data into account when answering.]`;
+              contextStr = `\n\n[SYSTEM CONTEXT: The user is analyzing ${activePair.display}. Price: $${last.close.toFixed(4)}. RSI: ${rsi}. MANDATORY: Respond EXCLUSIVELY in English.]`;
           }
-      } catch (e) { /* Ignore context failure silently */ }
+      } catch (e) { 
+          contextStr = "\n\n[SYSTEM: Respond in English only.]"; 
+      }
 
       const res = await fetch('http://localhost:3001/api/chat', {
         method: 'POST', headers: getApiHeaders(),
@@ -98,18 +207,15 @@ const AiAdvisorView = ({ activePair, aiMessages, setAiMessages, timeframe }) => 
       const macdHist = macdVals.length ? macdVals[macdVals.length-1].histogram.toFixed(4) : 'N/A';
       const recentCloses = data15m.slice(-10).map(d => d.close.toFixed(2)).join(', ');
 
-      const prompt = `Act as an expert Quantitative Trader. I want to deploy an automated trading bot on ${activePair.display}. 
-      Here is the recent 15m data context:
-      - Last 10 closes: [${recentCloses}]
-      - Current RSI (14): ${rsi}
-      - Current MACD Histogram: ${macdHist}
+      const prompt = `Act as an expert Quantitative Trader. Provide your answer entirely in English.
+      I want to deploy an automated trading bot on ${activePair.display}. 
+      Recent context: Closes [${recentCloses}], RSI ${rsi}, MACD ${macdHist}.
       
-      Based on this specific asset's current volatility and trend, provide a highly recommended bot configuration.
-      Format your response with:
-      1. Recommended Core Strategy (e.g. RSI, MACD Cross, Bollinger Breakout)
-      2. Suggested Indicator Settings (e.g. RSI Buy < 35, Sell > 65)
-      3. Suggested Stop-Loss (%) and Take-Profit (%)
-      4. Brief reasoning why this setup fits the current market state.`;
+      Provide a highly recommended configuration:
+      1. Core Strategy
+      2. Indicator Settings
+      3. SL (%) and TP (%)
+      4. Brief reasoning.`;
 
       const res = await fetch('http://localhost:3001/api/chat', {
         method: 'POST', headers: getApiHeaders(),
@@ -150,21 +256,17 @@ const AiAdvisorView = ({ activePair, aiMessages, setAiMessages, timeframe }) => 
           return `Price: $${close.toFixed(2)} | Trend: ${trend} | RSI: ${rsi} | MACD Hist: ${macdHist}`;
       };
 
-      const payloadStr = `[1 Minute] -> ${formatData(data1m)}\n[5 Minutes] -> ${formatData(data5m)}\n[15 Minutes] -> ${formatData(data15m)}\n\nEvaluate the timeframe confluence for this pair. Keep it extremely professional and actionable.`;
+      const payloadStr = `[1 Minute] -> ${formatData(data1m)}\n[5 Minutes] -> ${formatData(data5m)}\n[15 Minutes] -> ${formatData(data15m)}\n\nEvaluate confluence. Respond EXCLUSIVELY in English. Keep it extremely professional.`;
 
-      const res = await fetch('http://localhost:3001/api/ai/analyze', {
+      const res = await fetch('http://localhost:3001/api/chat', {
         method: 'POST', headers: getApiHeaders(),
-        body: JSON.stringify({ pair: activePair.display, timeframe: 'MULTI (1m,5m,15m)', data: payloadStr })
+        body: JSON.stringify({ message: payloadStr })
       });
-      
-      if (!res.ok) throw new Error(`Server error (${res.status})`);
       
       const resData = await res.json();
       if (resData.error) throw new Error(resData.error);
       
-      const formattedMsg = `📊 **AI MULTI-TIMEFRAME REPORT** 📊\n\n**Overall Bias:** ${resData.bias === 'BULLISH' ? '📈 BULLISH' : resData.bias === 'BEARISH' ? '📉 BEARISH' : '➖ NEUTRAL'}\n**Confluence Confidence:** ${resData.confidence}%\n**Algo Recommendation:** ${resData.advice === 'TRADE' ? '✅ Prime Condition for Trading' : '⛔ High Risk - Sideline Recommended'}\n\n**Reasoning:**\n${resData.reasoning}`;
-
-      setAiMessages(prev => [...prev, { role: 'model', text: formattedMsg }]);
+      setAiMessages(prev => [...prev, { role: 'model', text: resData.text }]);
     } catch(err) {
       setAiMessages(prev => [...prev, { role: 'error', text: "Could not analyze multi-timeframe data: " + err.message }]);
     } finally { setIsLoading(false); }
@@ -174,7 +276,7 @@ const AiAdvisorView = ({ activePair, aiMessages, setAiMessages, timeframe }) => 
       setShowHeatmap(true);
       setIsHeatmapLoading(true);
       try {
-          const pairs = "XXBTZUSD,XETHZUSD,SOLUSD,ADAUSD,XRPUSD,DOTUSD,DOGEUSD,AVAXUSD,LINKUSD,MATICUSD";
+          const pairs = "XXBTZUSD,XETHZUSD,SOLUSD,ADAUSD,XRPUSD,DOTUSD,DOGEUSD,AVAXUSD,LINKUSD,POLUSD";
           const res = await fetch('http://localhost:3001/api/ticker', {
               method: 'POST', headers: getApiHeaders(),
               body: JSON.stringify({ pair: pairs })
@@ -217,7 +319,7 @@ const AiAdvisorView = ({ activePair, aiMessages, setAiMessages, timeframe }) => 
                   <Layers size={14} /> <span>Deep Analysis</span>
                 </button>
                 <button onClick={handleGenerateStrategy} className="whitespace-nowrap flex items-center space-x-2 bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg text-xs font-bold transition shadow-lg shadow-emerald-900/20">
-                  <Cpu size={14} /> <span>Generate Bot Strategy</span>
+                  <Cpu size={14} /> <span>Generate Strategy</span>
                 </button>
             </div>
           </div>
@@ -227,8 +329,8 @@ const AiAdvisorView = ({ activePair, aiMessages, setAiMessages, timeframe }) => 
                 <div className="h-full flex flex-col items-center justify-center text-center opacity-50 space-y-4">
                     <Zap size={48} className="text-blue-500" />
                     <div className="max-w-md">
-                        <h3 className="text-lg font-bold text-zinc-200 mb-2">Your Institutional Quant Copilot</h3>
-                        <p className="text-sm text-zinc-400">Ask questions about market structure, request bot parameter tuning, or click the tools above to generate deep analytical reports.</p>
+                        <h3 className="text-lg font-bold text-zinc-200 mb-2">Institutional Quant Copilot</h3>
+                        <p className="text-sm text-zinc-400">Ask about market trends, bot settings, or use the tools above for automated reports.</p>
                     </div>
                 </div>
             )}
@@ -257,13 +359,13 @@ const AiAdvisorView = ({ activePair, aiMessages, setAiMessages, timeframe }) => 
           <div className="p-6 bg-[#09090b] border-t border-zinc-800 shrink-0 flex flex-col space-y-4">
             <div className="flex space-x-2 overflow-x-auto pb-1 [&::-webkit-scrollbar]:hidden">
               {quickPrompts.map((prompt, idx) => (
-                <button key={idx} onClick={() => sendMessage(prompt)} disabled={isLoading} className="whitespace-nowrap px-4 py-2.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-800 hover:border-blue-500/50 rounded-xl text-xs font-medium transition active:scale-95 disabled:opacity-50 shadow-sm">
+                <button key={idx} onClick={() => sendMessage(prompt)} disabled={isLoading} className="whitespace-nowrap px-4 py-2.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-800 hover:border-blue-500/50 rounded-xl text-xs font-medium transition active:scale-95 disabled:opacity-50">
                   {prompt}
                 </button>
               ))}
             </div>
             <div className="flex space-x-3">
-              <input type="text" value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && sendMessage()} placeholder={`Ask Copilot about ${activePair.display}...`} className="flex-1 bg-[#050505] border border-zinc-800 focus:border-blue-500 rounded-xl px-5 py-4 text-sm text-white outline-none transition shadow-inner" />
+              <input type="text" value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && sendMessage()} placeholder={`Ask about ${activePair.display}...`} className="flex-1 bg-[#050505] border border-zinc-800 focus:border-blue-500 rounded-xl px-5 py-4 text-sm text-white outline-none transition" />
               <button onClick={() => sendMessage()} disabled={isLoading || !input.trim()} className="bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-800 disabled:text-zinc-600 text-white px-8 rounded-xl transition flex items-center justify-center font-bold shadow-lg shadow-blue-900/20">
                  <Send size={18} />
               </button>
@@ -271,7 +373,6 @@ const AiAdvisorView = ({ activePair, aiMessages, setAiMessages, timeframe }) => 
           </div>
       </div>
 
-      {/* Heatmap Pane */}
       {showHeatmap && (
          <>
             <div 
