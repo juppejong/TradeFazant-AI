@@ -211,6 +211,67 @@ app.post('/api/ai/analyze', async (req, res) => {
     }
 });
 
+// ==========================================
+// 🤖 QUANT AI COPILOT: MARKET SCANNER
+// ==========================================
+app.get('/api/ai/market-scan', async (req, res) => {
+    try {
+        // 🛠️ EXACT DEZELFDE LOGICA ALS IN JE CHAT ROUTE
+        const geminiKey = req.headers['x-gemini-api-key'] || GEMINI_API_KEY;
+
+        if (!geminiKey) {
+            console.error("❌ Geen Gemini Key gevonden in headers of globale variabele!");
+            return res.status(400).json({ error: "Gemini API key missing. Please check settings." });
+        }
+
+        // 1. Haal data op van Kraken
+        const pairsToScan = 'XXBTZUSD,XETHZUSD,SOLUSD,ADAUSD,XRPUSD,DOGEUSD,DOTUSD,LINKUSD,AVAXUSD';
+        const krakenRes = await fetch(`https://api.kraken.com/0/public/Ticker?pair=${pairsToScan}`);
+        const krakenJson = await krakenRes.json();
+        const displayNames = { 'XXBTZUSD': 'BTC', 'XETHZUSD': 'ETH', 'SOLUSD': 'SOL', 'ADAUSD': 'ADA', 'XRPUSD': 'XRP', 'DOGEUSD': 'DOGE', 'DOTUSD': 'DOT', 'LINKUSD': 'LINK', 'AVAXUSD': 'AVAX' };
+        
+        let marketContext = "Current Market Data (Last 24 hours):\n\n";
+        for (const [pair, data] of Object.entries(krakenJson.result)) {
+            const coin = displayNames[pair] || pair;
+            const change = (((parseFloat(data.c[0]) - parseFloat(data.o)) / parseFloat(data.o)) * 100).toFixed(2);
+            marketContext += `- ${coin}: $${data.c[0]} (${change}%)\n`;
+        }
+
+        // 2. De Prompt (in het Engels)
+        const prompt = `Analyze this crypto data for a 'Mean Reversion' strategy. Which 3 coins are best to start a bot on? Return ONLY JSON: { "topPicks": [{ "coin": "NAME", "reason": "WHY" }], "marketSentiment": "TEXT" } \n Data: ${marketContext}`;
+
+        // 3. De AI aanroep (Gebruik 1.5-flash voor maximale compatibiliteit)
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`;
+        
+        const aiRes = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: [{ parts: [{ text: prompt }] }],
+                generationConfig: { 
+                    responseMimeType: "application/json", 
+                    temperature: 0.2 
+                }
+            })
+        });
+
+        const aiData = await aiRes.json();
+
+        // Als Gemini een error teruggeeft (bijv. 400 Bad Request voor de key)
+        if (aiData.error) {
+            console.error("🔥 Gemini API Error:", aiData.error);
+            return res.status(400).json({ error: aiData.error.message });
+        }
+
+        const resultText = aiData.candidates[0].content.parts[0].text;
+        res.json(JSON.parse(resultText));
+
+    } catch (error) {
+        console.error("🔥 Route Error:", error.message);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 app.post('/api/ai/tune', requireAuth, async (req, res) => {
     try {
         const geminiKey = req.headers['x-gemini-api-key'] || GEMINI_API_KEY;
