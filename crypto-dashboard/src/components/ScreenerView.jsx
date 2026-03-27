@@ -4,6 +4,7 @@ import {
   ArrowUpRight, ArrowDownRight, Search, Plus, Filter, RefreshCw, Clock
 } from 'lucide-react';
 
+
 // ==========================================
 // 🛠️ GEOPTIMALISEERDE INDICATORS (Wilder's Smoothing)
 // ==========================================

@@ -3,12 +3,13 @@ import {
   Settings, Activity, Layers, Bot, X, Trash2, Plus, Play, Pause, 
   ShieldAlert, Target, TrendingUp, AlertTriangle, Clock, ArrowDownToLine, 
   Sparkles, BrainCircuit, BarChart2, ShieldCheck, Power, SunMoon, HelpCircle, History, Hand, 
-  Copy, RotateCcw, Save
+  Copy, RotateCcw, Save,Eye
 } from 'lucide-react';
 
 // ==========================================
 // 🛠️ INTERNAL API HELPERS
 // ==========================================
+const API_BASE = 'http://localhost:3001';
 
 const getApiHeaders = () => {
     const token = localStorage.getItem('bot_auth_token') || '';
@@ -24,14 +25,14 @@ const getApiHeaders = () => {
 
 const fetchKrakenOHLC = async (interval, pair) => {
     try {
-        const res = await fetch('/api/ohlc', {
+        const res = await fetch(`${API_BASE}/api/ohlc`, {
             method: 'POST',
             headers: getApiHeaders(),
             body: JSON.stringify({ pair, interval })
         });
         const data = await res.json();
         if (data.error && data.error.length > 0) throw new Error(data.error[0]);
-        const key = Object.keys(data.result)[0];
+        const key = Object.keys(data.result).find(k => k !== 'last');
         return data.result[key].map(d => ({
             time: d[0],
             open: parseFloat(d[1]),
@@ -41,6 +42,7 @@ const fetchKrakenOHLC = async (interval, pair) => {
             volume: parseFloat(d[6])
         }));
     } catch (e) {
+        console.error("OHLC Fetch Error:", e);
         return [];
     }
 };
@@ -60,18 +62,27 @@ const InfoTooltip = ({ text }) => (
 );
 
 const BotLogTerminal = ({ logs }) => {
-  const endRef = useRef(null);
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [logs]);
+  const terminalRef = useRef(null);
   const safeLogs = Array.isArray(logs) ? logs : [];
+
   return (
-    <div className="h-44 bg-[#050505]/80 rounded-xl p-3 overflow-y-auto text-[10px] font-mono border border-zinc-800/50 flex flex-col space-y-1 mt-4">
+    <div 
+      ref={terminalRef}
+      className="h-44 bg-[#050505]/80 rounded-xl p-3 overflow-y-auto text-[10px] font-mono border border-zinc-800/50 flex flex-col space-y-1 mt-4 custom-scrollbar"
+      style={{ scrollBehavior: 'smooth' }} // Zorgt voor de vloeiende beweging zonder de pagina te storen
+    >
       {safeLogs.length === 0 && <span className="text-zinc-600">Bot initialized. Waiting for data...</span>}
       {safeLogs.map((l, i) => (
-        <div key={i} className={`flex space-x-2 ${l.type === 'buy' ? 'text-emerald-400 font-bold' : l.type === 'sell' ? 'text-rose-400 font-bold' : l.type === 'error' ? 'text-rose-600' : l.type === 'success' ? 'text-emerald-500' : 'text-zinc-500'}`}>
-          <span className="shrink-0">[{l.time}]</span><span>{l.msg}</span>
+        <div key={i} className={`flex space-x-2 ${
+          l.type === 'buy' ? 'text-emerald-400 font-bold' : 
+          l.type === 'sell' ? 'text-rose-400 font-bold' : 
+          l.type === 'error' ? 'text-rose-600' : 
+          l.type === 'success' ? 'text-emerald-500' : 'text-zinc-500'
+        }`}>
+          <span className="shrink-0 opacity-50">[{l.time}]</span>
+          <span>{l.msg}</span>
         </div>
       ))}
-      <div ref={endRef} />
     </div>
   );
 };
@@ -132,6 +143,21 @@ const BotManagerView = ({ bots, setBots, availablePairs, activePair }) => {
 
   const tfMapKeys = ['1m', '5m', '15m', '1H', '4H', '1D'];
 
+  const aiStyle = (
+    <style>
+      {`
+        @keyframes border-glow {
+          0% { border-color: rgba(59, 130, 246, 0.1); }
+          50% { border-color: rgba(59, 130, 246, 0.6); box-shadow: 0 0 15px rgba(59, 130, 246, 0.2); }
+          100% { border-color: rgba(59, 130, 246, 0.1); }
+        }
+        .ai-analyzing {
+          animation: border-glow 3s infinite ease-in-out;
+        }
+      `}
+    </style>
+  );
+
   // --- ACTIONS ---
   const startEditing = (bot) => {
     setEditingBotId(bot.id);
@@ -171,19 +197,23 @@ const BotManagerView = ({ bots, setBots, availablePairs, activePair }) => {
   };
 
   const saveBot = () => {
+    const parseNum = (val) => {
+        if (!val) return 0;
+        return parseFloat(String(val).replace(',', '.'));
+    };
     const config = { 
-        timeframe: botTimeframe, sizingType: 'percent', tradePercent: parseFloat(tradePercent),
-        slPct: parseFloat(slPct), tpPct: parseFloat(tpPct),
-        useTrailing, trailingPct: parseFloat(trailingPct),
-        useBreakEven, breakEvenTrigger: parseFloat(breakEvenTrigger),
+        timeframe: botTimeframe, sizingType: 'percent', tradePercent: parseNum(tradePercent),
+        slPct: parseNum(slPct), tpPct: parseNum(tpPct),
+        useTrailing, trailingPct: parseNum(trailingPct),
+        useBreakEven, breakEvenTrigger: parseNum(breakEvenTrigger),
         useCircuitBreaker, maxConsecutiveLosses: parseInt(maxConsecutiveLosses),
         rsiPeriod: parseInt(rsiPeriod), rsiBuyLevel: parseInt(rsiBuyLevel), rsiSellLevel: parseInt(rsiSellLevel),
-        useDynamicRisk, atrMultiplierSL: parseFloat(atrMultiplierSL), atrMultiplierTP: parseFloat(atrMultiplierTP),
+        useDynamicRisk, atrMultiplierSL: parseNum(atrMultiplierSL), atrMultiplierTP: parseNum(atrMultiplierTP),
         useAdxFilter, adxThreshold: parseInt(adxThreshold),
-        useVolumeFilter, volumeMultiplier: parseFloat(volumeMultiplier),
+        useVolumeFilter, volumeMultiplier: parseNum(volumeMultiplier),
         useAiFilter, aiMinConfidence: parseInt(aiMinConfidence),
         useTimeFilter, timeStart, timeEnd,
-        useDca, dcaCount: parseInt(dcaCount), dcaDropPct: parseFloat(dcaDropPct),
+        useDca, dcaCount: parseInt(dcaCount), dcaDropPct: parseNum(dcaDropPct),
         cooldownMins: parseInt(cooldownMins)
     };
 
@@ -195,7 +225,7 @@ const BotManagerView = ({ bots, setBots, availablePairs, activePair }) => {
           isRunning: true, 
           state: { phase: 'WAITING', currentPrice: 0, lastAction: 'NONE', averageEntryPrice: 0, totalVolume: 0, livePnl: 0, livePnlPct: 0, consecutiveLosses: 0 }, 
           stats: { trades: [], winCount: 0, lossCount: 0, grossProfit: 0, grossLoss: 0 },
-          logs: [{time: new Date().toLocaleTimeString(), msg: `🚀 Bot started on ${newBotPair.display}`, type: 'success'}], 
+          logs: [{time: new Date().toLocaleTimeString(), msg: `🚀 Bot gestart op ${newBotPair.display}`, type: 'success'}], 
           config
         };
         setBots([...bots, newBot]);
@@ -204,56 +234,138 @@ const BotManagerView = ({ bots, setBots, availablePairs, activePair }) => {
     setEditingBotId(null);
   };
 
-  const handleManualTrade = async (botId, side) => {
+  const [aiSuggestion, setAiSuggestion] = useState(null);
+
+  const applyAiTune = (botId, newConfig) => {
+      setBots(prev => prev.map(b => b.id === botId ? { ...b, config: { ...b.config, ...newConfig } } : b));
+      setAiSuggestion(null);
+  };
+
+const handleManualTrade = async (botId, side) => {
     if (!window.confirm(`Force ${side} order for this bot?`)) return;
+    
     const newBots = [...bots];
     const botIdx = newBots.findIndex(b => b.id === botId);
     const bot = newBots[botIdx];
 
-    bot.logs.push({ time: new Date().toLocaleTimeString(), msg: `⚡ Manual ${side} override triggered...`, type: 'info' });
+    // Herleiden van de pair info voor robuustheid
+    const displayParts = bot.pair.display.split('/');
+    const detectedQuote = bot.pair.quote || (displayParts.length > 1 ? displayParts[1] : 'USD');
+    const detectedBase = bot.pair.base || displayParts[0];
+
+    bot.logs.push({ 
+        time: new Date().toLocaleTimeString(), 
+        msg: `⚡ Manual ${side} override triggered for ${bot.pair.display}...`, 
+        type: 'info' 
+    });
     setBots([...newBots]);
 
     try {
         const data = await fetchKrakenOHLC(1, bot.pair.altname);
-        if (!data.length) throw new Error("Market data unavailable.");
-        const currentPrice = data[data.length-1].close;
-        const nowMs = Date.now();
+        if (!data || data.length === 0) throw new Error("Market data unavailable.");
+        
+        const currentPrice = data[data.length - 1].close;
 
         if (side === 'BUY') {
-            const res = await fetch('/api/balance', { method: 'POST', headers: getApiHeaders(), body: JSON.stringify({}) });
-            const bData = await res.json();
-            const quoteBalance = parseFloat(bData[bot.pair.quote === 'USD' ? 'ZUSD' : bot.pair.quote] || 0);
-            const volumeToBuy = Number(((quoteBalance * (bot.config.tradePercent / 100)) / currentPrice).toFixed(8));
+            const resBal = await fetch(`${API_BASE}/api/balance`, { 
+                method: 'POST', 
+                headers: getApiHeaders() 
+            });
+            const bData = await resBal.json();
+            
+            // Kraken mapping voor fiat (USD -> ZUSD, EUR -> ZEUR)
+            const quoteKey = detectedQuote === 'USD' ? 'ZUSD' : (detectedQuote === 'EUR' ? 'ZEUR' : detectedQuote);
+            const quoteBalance = parseFloat(bData[quoteKey] || bData[detectedQuote] || 0);
+            
+            // 🔥 FIX 1: 2% veiligheidsmarge inbouwen voor Kraken fees (0.26%) en Market Slippage
+            const safeQuoteBalance = quoteBalance * 0.98;
+            
+            const volumeToBuy = Number(((safeQuoteBalance * (bot.config.tradePercent / 100)) / currentPrice).toFixed(8));
 
-            await fetch('/api/order', { method: 'POST', headers: getApiHeaders(), body: JSON.stringify({ pair: bot.pair.altname, type: 'buy', ordertype: 'market', volume: volumeToBuy }) });
+            if (volumeToBuy <= 0) {
+                throw new Error(`Insufficient ${detectedQuote} balance (Available: ${quoteBalance.toFixed(2)})`);
+            }
+
+            const resOrder = await fetch(`${API_BASE}/api/order`, { 
+                method: 'POST', 
+                headers: getApiHeaders(), 
+                body: JSON.stringify({ 
+                    pair: bot.pair.altname, 
+                    type: 'buy', 
+                    ordertype: 'market', 
+                    volume: volumeToBuy 
+                }) 
+            });
+            const oData = await resOrder.json();
+            if (oData.error) throw new Error(oData.error);
 
             bot.logs.push({ time: new Date().toLocaleTimeString(), msg: `✅ MANUAL BUY SUCCESS @ $${currentPrice.toFixed(4)}`, type: 'buy' });
             bot.state.totalVolume += volumeToBuy; 
             bot.state.averageEntryPrice = currentPrice;
+
         } else {
-            const volToSell = Number(bot.state.totalVolume.toFixed(8));
-            await fetch('/api/order', { method: 'POST', headers: getApiHeaders(), body: JSON.stringify({ pair: bot.pair.altname, type: 'sell', ordertype: 'market', volume: volToSell }) });
+            // 🔥 FIX 2: Haal de échte actuele base-balans op (na eventuele fee aftrek van Kraken)
+            const resBal = await fetch(`${API_BASE}/api/balance`, { method: 'POST', headers: getApiHeaders() });
+            const bData = await resBal.json();
+            const baseKey = detectedBase === 'BTC' ? 'XXBT' : (detectedBase === 'ETH' ? 'XETH' : detectedBase);
+            const actualBaseBalance = parseFloat(bData[baseKey] || bData[detectedBase] || 0);
+
+            // Verkoop wat de bot registreert, maar NOOIT meer dan wat daadwerkelijk in de wallet staat
+            const volToSell = Math.min(Number(bot.state.totalVolume.toFixed(8)), actualBaseBalance);
             
-            const pnl = (currentPrice - bot.state.averageEntryPrice) * bot.state.totalVolume;
+            if (volToSell <= 0) throw new Error(`No ${detectedBase} position to sell. (Wallet balance: ${actualBaseBalance})`);
+
+            const resOrder = await fetch(`${API_BASE}/api/order`, { 
+                method: 'POST', 
+                headers: getApiHeaders(), 
+                body: JSON.stringify({ 
+                    pair: bot.pair.altname, 
+                    type: 'sell', 
+                    ordertype: 'market', 
+                    volume: volToSell 
+                }) 
+            });
+            const oData = await resOrder.json();
+            if (oData.error) throw new Error(oData.error);
+            
+            // 🔥 FIX 3: Gecrashte variabelen (nowMs en pnl) gefixt
+            const pnl = (currentPrice - bot.state.averageEntryPrice) * volToSell;
+            
             bot.logs.push({ time: new Date().toLocaleTimeString(), msg: `✅ MANUAL SELL SUCCESS @ $${currentPrice.toFixed(4)}`, type: 'sell' });
-            bot.stats.trades.push({ id: Date.now().toString().slice(-8), time: nowMs, entryPrice: bot.state.averageEntryPrice, exitPrice: currentPrice, pnl });
-            bot.state.totalVolume = 0; bot.state.averageEntryPrice = 0;
+            bot.stats.trades.push({ 
+                id: Date.now().toString().slice(-8), 
+                time: Date.now(), 
+                entryPrice: bot.state.averageEntryPrice, 
+                exitPrice: currentPrice, 
+                pnl: pnl 
+            });
+            bot.state.totalVolume = 0; 
+            bot.state.averageEntryPrice = 0;
         }
         setBots([...newBots]);
-    } catch (err) { bot.logs.push({ time: new Date().toLocaleTimeString(), msg: `❌ ERROR: ${err.message}`, type: 'error' }); setBots([...newBots]); }
-  };
+    } catch (err) { 
+        console.error("Manual Trade Error:", err);
+        bot.logs.push({ 
+            time: new Date().toLocaleTimeString(), 
+            msg: `❌ ERROR: ${err.message}`, 
+            type: 'error' 
+        }); 
+        setBots([...newBots]); 
+    }
+};
 
   const setAllBotsState = (isRunning) => setBots(bots.map(b => ({ ...b, isRunning })));
 
   return (
     <div className="flex-1 flex flex-col bg-[#050505] h-full overflow-y-auto">
+      {aiStyle} {/* 👈 VOEG DIT TOE ZODAT DE CSS GELADEN WORDT */}
       <div className="h-16 border-b border-zinc-800 flex items-center justify-between px-6 bg-[#09090b] shrink-0 sticky top-0 z-[60]">
         <div className="flex items-center"><Bot className="w-5 h-5 text-purple-500 mr-3" /><div><h2 className="text-zinc-100 font-bold tracking-wide">Auto Trading Bots</h2><p className="text-[10px] text-zinc-500 uppercase tracking-widest">Multi-Strategy Quant Engine</p></div></div>
         {!isCreating && (
           <div className="flex items-center gap-3">
              <div className="flex bg-[#050505] border border-zinc-800 p-1 rounded-lg">
-                <button onClick={() => setAllBotsState(true)} className="px-3 py-1.5 text-[10px] font-bold text-emerald-500 hover:bg-emerald-500/10 rounded transition uppercase">Start Alle</button>
-                <button onClick={() => setAllBotsState(false)} className="px-3 py-1.5 text-[10px] font-bold text-rose-500 hover:bg-rose-500/10 rounded transition uppercase">Stop Alle</button>
+                <button onClick={() => setAllBotsState(true)} className="px-3 py-1.5 text-[10px] font-bold text-emerald-500 hover:bg-emerald-500/10 rounded transition uppercase">Start All</button>
+                <button onClick={() => setAllBotsState(false)} className="px-3 py-1.5 text-[10px] font-bold text-rose-500 hover:bg-rose-500/10 rounded transition uppercase">Stop All</button>
              </div>
              <button onClick={() => setIsCreating(true)} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-xs font-bold transition shadow-lg"><Plus size={14} className="inline mr-1"/> New Bot</button>
           </div>
@@ -482,21 +594,129 @@ const BotManagerView = ({ bots, setBots, availablePairs, activePair }) => {
                  const pf = (stats.grossLoss || 0) === 0 ? ((stats.grossProfit || 0) > 0 ? '∞' : '0.0') : ((stats.grossProfit || 0) / (stats.grossLoss || 0)).toFixed(2);
 
                  return (
-                  <div key={bot.id} className="bg-[#0b0e11] border border-zinc-800 rounded-3xl p-6 flex flex-col shadow-2xl relative transition-all hover:border-blue-500/30 group">
-                     {/* HEADER */}
-                     <div className="flex justify-between items-start mb-2">
-                       <div className="flex items-center space-x-3">
-                          <div className={`w-2.5 h-2.5 rounded-full ${bot.isRunning ? 'bg-blue-500 animate-pulse shadow-[0_0_10px_rgba(59,130,246,0.8)]' : 'bg-rose-500'}`}></div>
-                          <h3 className="text-xl font-bold text-zinc-100 tracking-tight">{bot.pair?.display || 'Unknown'}</h3>
-                       </div>
-                       <div className="flex space-x-2">
-                          <button onClick={() => setBots(bots.map(b => b.id === bot.id ? { ...b, isRunning: !b.isRunning } : b))} className={`p-2 rounded-lg transition ${bot.isRunning ? 'text-amber-500 hover:bg-amber-500/10' : 'text-emerald-500 hover:bg-emerald-500/10'}`}>
-                             {bot.isRunning ? <Pause size={18}/> : <Play size={18}/>}
+                    <div 
+                      key={bot.id} 
+                      className={`relative transition-all duration-500 ... ${
+                        bot.state?.isTriggered ? 'ring-4 ring-blue-500 shadow-[0_0_40px_rgba(59,130,246,0.6)] scale-[1.02]' : 'border-white/5'
+                      }`}
+                    >
+                      {/* Subtiele achtergrond glow */}
+                      <div className={`absolute -top-24 -right-24 w-64 h-64 blur-[100px] pointer-events-none transition-opacity duration-1000 ${bot.isRunning ? 'bg-blue-600/10 opacity-100' : 'bg-rose-600/5 opacity-50'}`}></div>
+                      
+                      {/* Gecorrigeerde Header voor BotManagerView.jsx */}
+                      <div className="flex justify-between items-start mb-6 relative z-10">
+                          <div className="flex items-center gap-4">
+                            {/* Geanimeerde Status Pulse */}
+                            <div className="relative">
+                              <div className={`w-12 h-12 rounded-2xl flex items-center justify-center border ${bot.isRunning ? 'border-blue-500/30 bg-blue-500/10' : 'border-zinc-800 bg-zinc-900'}`}>
+                                <Bot size={24} className={bot.isRunning ? 'text-blue-400 animate-pulse' : 'text-zinc-600'} />
+                              </div>
+                              {bot.isRunning && (
+                                <span className="absolute -top-1 -right-1 w-3 h-3 bg-emerald-500 rounded-full border-2 border-[#0d0d12] animate-bounce"></span>
+                              )}
+                            </div>
+                            <div>
+                              <h3 className="text-xl font-black text-white tracking-tighter">{bot.pair?.display}</h3>
+                              <div className="flex items-center gap-2">
+                                <span className="text-[9px] font-black text-blue-500 uppercase tracking-widest px-2 py-0.5 bg-blue-500/10 rounded-md border border-blue-500/20">
+                                  {bot.strategy}
+                                </span>
+                                <span className="text-[9px] font-bold text-zinc-500 uppercase">{bot.config?.timeframe}</span>
+                              </div>
+                            </div>
+                          </div>
+
+                        {/* 🛠️ DE ACTIE KNOPPEN - CONTROLEER DEZE ONCLICK FUNCTIES */}
+                        <div className="flex bg-black/50 border border-white/5 rounded-2xl p-1.5 backdrop-blur-md">
+                          {/* PAUSE / PLAY KNOP */}
+                          <button 
+                            onClick={() => setBots(bots.map(b => b.id === bot.id ? { ...b, isRunning: !b.isRunning } : b))}
+                            className="p-2 transition-colors group/btn"
+                            title={bot.isRunning ? "Pause Bot" : "Start Bot"}
+                          >
+                            {bot.isRunning ? (
+                              <Pause size={18} className="text-amber-500 group-hover/btn:scale-110 transition-transform" />
+                            ) : (
+                              <Play size={18} className="text-emerald-500 group-hover/btn:scale-110 transition-transform" />
+                            )}
                           </button>
-                          <button onClick={() => startEditing(bot)} className="p-2 text-zinc-500 hover:text-blue-400 rounded-lg transition hover:bg-blue-500/10"><Settings size={18}/></button>
-                          <button onClick={() => setBots(bots.filter(b => b.id !== bot.id))} className="p-2 text-zinc-600 hover:text-rose-500 rounded-lg transition hover:bg-rose-500/10"><Trash2 size={18}/></button>
-                       </div>
-                     </div>
+
+                          {/* SETTINGS KNOP */}
+                          <button 
+                            onClick={() => startEditing(bot)}
+                            className="p-2 text-zinc-500 hover:text-blue-400 transition-colors"
+                          >
+                            <Settings size={18} />
+                          </button>
+
+                          {/* VERWIJDER KNOP */}
+                          <button 
+                            onClick={() => {
+                              if(window.confirm("Are you sure you want to delete this bot?")) {
+                                setBots(bots.filter(b => b.id !== bot.id));
+                              }
+                            }}
+                            className="p-2 text-zinc-600 hover:text-rose-500 transition-colors"
+                          >
+                            <Trash2 size={18} />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Performance Matrix met Glass-effect */}
+                      <div className="grid grid-cols-2 gap-3 mb-6 relative z-10">
+                        <div className="bg-white/[0.03] border border-white/5 rounded-2xl p-4 transition-colors hover:bg-white/[0.05]">
+                          <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Total Return</span>
+                          <span className={`text-xl font-mono font-black ${totalPnL >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                            {totalPnL >= 0 ? '+' : ''}${totalPnL.toFixed(2)}
+                          </span>
+                        </div>
+                        <div className="bg-white/[0.03] border border-white/5 rounded-2xl p-4 transition-colors hover:bg-white/[0.05]">
+                          <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Win Rate</span>
+                          <span className="text-xl font-mono font-black text-white">{winrate}%</span>
+                        </div>
+                      </div>
+
+                      {/* BotManagerView.jsx - Alleen tonen als AI Filter actief is */}
+
+
+
+                      <div className="grid grid-cols-2 gap-4 mb-6">
+                        <div className="bg-black/40 border border-white/5 rounded-2xl p-4 relative overflow-hidden">
+                          <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block mb-2">Live RSI Momentum</span>
+                          <div className="flex items-end gap-1 h-8">
+                            {/* Een kleine visuele indicator van RSI bars */}
+                            {[40, 55, 45, 60, 50, 65, 70, 55].map((h, i) => (
+                              <div key={i} className={`flex-1 rounded-t-sm transition-all duration-1000 ${bot.isRunning ? 'bg-blue-500/40' : 'bg-zinc-800'}`} style={{ height: `${h}%` }}></div>
+                            ))}
+                          </div>
+                          <div className="absolute top-4 right-4 text-xs font-mono font-bold text-blue-400">
+                            {bot.state?.currentRsi || '54.2'}
+                          </div>
+                        </div>
+                        
+                        <div className="bg-black/40 border border-white/5 rounded-2xl p-4 flex flex-col justify-center items-center">
+                          <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block mb-1">Execution Bias</span>
+                          <div className={`text-xs font-black uppercase tracking-widest ${bot.state?.livePnlPct >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                            {bot.state?.livePnlPct >= 0 ? 'Accumulating' : 'Defensive'}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="mb-6 space-y-2">
+                        <div className="flex justify-between items-end">
+                          <span className="text-[9px] font-black text-zinc-500 uppercase">Live Session PnL</span>
+                          <span className={`text-sm font-mono font-black ${bot.state?.livePnlPct >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                            {bot.state?.livePnlPct >= 0 ? '+' : ''}{(bot.state?.livePnlPct|| 0).toFixed(2)}%
+                          </span>
+                        </div>
+                        <div className="w-full h-1.5 bg-zinc-900 rounded-full overflow-hidden border border-white/5">
+                          <div 
+                            className={`h-full transition-all duration-1000 shadow-[0_0_10px_rgba(0,0,0,0.5)] ${bot.state?.livePnlPct >= 0 ? 'bg-emerald-500' : 'bg-rose-500'}`} 
+                            style={{ width: `${Math.min(100, Math.abs(bot.state?.livePnlPct * 10) + 10)}%` }}
+                          ></div>
+                        </div>
+                      </div>
 
                      {/* BADGES */}
                      <div className="flex flex-wrap gap-2 mb-8">
@@ -551,6 +771,41 @@ const BotManagerView = ({ bots, setBots, availablePairs, activePair }) => {
                            ))}
                         </div>
                      </div>
+
+
+
+                      {aiSuggestion && (
+                        <div className="mt-4 p-4 bg-gradient-to-br from-indigo-900/40 to-purple-900/40 border border-indigo-500/50 rounded-2xl animate-in slide-in-from-top-4 duration-500">
+                            <div className="flex items-center gap-2 mb-3">
+                                <div className="p-1.5 bg-indigo-500 rounded-lg shadow-[0_0_15px_rgba(99,102,241,0.6)]">
+                                    <Sparkles size={14} className="text-white" />
+                                </div>
+                                <span className="text-[10px] font-black text-white uppercase tracking-widest">Gemini Strategy Optimization</span>
+                            </div>
+                            
+                            <p className="text-[11px] text-indigo-200 mb-4 leading-relaxed font-medium">
+                                "{aiSuggestion.reasoning}"
+                            </p>
+                            
+                            <div className="grid grid-cols-2 gap-2 mb-4">
+                                <div className="text-[10px] bg-black/40 p-2 rounded-xl border border-white/5">
+                                    <span className="text-zinc-500 block uppercase">Stop-Loss</span>
+                                    <span className="text-rose-400 font-bold">{bot.config.slPct}% → {aiSuggestion.suggestedConfig.slPct}%</span>
+                                </div>
+                                <div className="text-[10px] bg-black/40 p-2 rounded-xl border border-white/5">
+                                    <span className="text-zinc-500 block uppercase">Take-Profit</span>
+                                    <span className="text-emerald-400 font-bold">{bot.config.tpPct}% → {aiSuggestion.suggestedConfig.tpPct}%</span>
+                                </div>
+                            </div>
+
+                            <button 
+                                onClick={() => applyAiTune(bot.id, aiSuggestion.suggestedConfig)}
+                                className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-black uppercase tracking-tighter rounded-xl transition-all shadow-lg active:scale-95"
+                            >
+                                Auto-Apply Optimization
+                            </button>
+                        </div>
+                    )}
 
                      <BotLogTerminal logs={bot.logs || []} />
 

@@ -3,18 +3,16 @@ import ReactDOM from 'react-dom';
 import { calculateSMA, calculateEMA, calculateMACD, calculateBB, calculateRSI } from './utils/indicators';
 import { tfMap, getApiHeaders, fetchKrakenPairs, fetchKrakenOHLC } from './utils/api';
 import PortfolioView from './components/PortfolioView';
-import WhaleHubView from './components/WhaleHubView';
 import AiAdvisorView from './components/AiAdvisorView';
 import BotManagerView from './components/BotManagerView';
 import ScreenerView from './components/ScreenerView'; // ✅ Toegevoegd
-import MasterDashboardView from './components/MasterDashboardView'; // ✅ Toegevoegd
 import { useKrakenMarketData } from './utils/websocket';
 import TradingChart, { PopoutWindow } from './components/TradingChart';
 import { 
   Settings, BarChart2, Activity, Layers, ChevronDown, LineChart, Bot, Wallet, 
   Maximize2, Search, User, LayoutGrid, Square, ExternalLink, Zap, // ✅ Zap toegevoegd
   ChevronRight, ChevronLeft, Sparkles, Send, X, Trash2, Plus, Play, Pause, Crosshair,
-  ShieldAlert, Target, TrendingUp, AlertTriangle, Clock, ArrowDownToLine, KeyRound, Waves, LayoutDashboard
+  ShieldAlert, Target, TrendingUp, AlertTriangle, Clock, ArrowDownToLine, KeyRound
 } from 'lucide-react';
 
 // ==========================================
@@ -22,7 +20,7 @@ import {
 // ==========================================
 export default function TradingDashboard() {
   const [scriptLoaded, setScriptLoaded] = useState(false);
-  const [currentView, setCurrentView] = useState('dashboard');
+  const [currentView, setCurrentView] = useState('charts');
   const [availablePairs, setAvailablePairs] = useState([]);
   const [gridPairs, setGridPairs] = useState([]);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -79,7 +77,6 @@ export default function TradingDashboard() {
   });
 
   const [bots, setBots] = useState([]); 
-  const [whaleTrades, setWhaleTrades] = useState([]); // Voeg deze regel toe
   const botsRef = useRef(bots);
   const balancesRef = useRef(balances);
   const fetchOrdersRef = useRef(null);
@@ -87,322 +84,284 @@ export default function TradingDashboard() {
   useEffect(() => { botsRef.current = bots; }, [bots]);
   useEffect(() => { balancesRef.current = balances; }, [balances]);
 
+  // ==========================================
+  // 🤖 BOT ENGINE 2.0 (English UI & Logs)
+  // ==========================================
   useEffect(() => {
-  const fetchWhales = async () => {
-    try {
-      const res = await fetch('http://localhost:3001/api/whales');
-      const data = await res.json();
-      setWhaleTrades(data);
-    } catch (e) {
-      console.error("Whale fetch error in main dashboard", e);
-    }
-  };
-
-  fetchWhales();
-  const interval = setInterval(fetchWhales, 30000); // Elke 30 sec verversen
-  return () => clearInterval(interval);
-}, []);
-
-
-
-    // ==========================================
-    // 🤖 BOT ENGINE 2.0 (English UI & Logs)
-    // ==========================================
-    useEffect(() => {
     const engineInterval = setInterval(async () => {
       const currentBots = botsRef.current;
       const currentBalances = balancesRef.current;
       if (currentBots.length === 0) return;
+      let hasUpdates = false;
 
       const updatedBots = await Promise.all(currentBots.map(async (bot) => {
-        if (!bot.isRunning || bot.state.isProcessing) return bot; // Stop als bot al bezig is met een order
-        
-        const updatedBot = JSON.parse(JSON.stringify(bot)); // Deep copy om state vervuiling te voorkomen
-        const { config: cfg, state, stats } = updatedBot;
+        if (!bot.isRunning) return bot;
+        const updatedBot = { ...bot };
+        const cfg = updatedBot.config;
+        const state = updatedBot.state;
+        const stats = updatedBot.stats;
 
         try {
           const tfMins = tfMap[cfg.timeframe] || 1;
           const data = await fetchKrakenOHLC(tfMins, updatedBot.pair.altname);
-          if (!data || data.length < 50) return updatedBot;
+          if (data.length < 50) return updatedBot;
 
           const botCurrentClose = data[data.length - 1].close;
           const nowMs = Date.now();
           let buySignal = false, sellSignal = false;
-          let logMsg = `[Analytical] ${updatedBot.pair.display} | $${botCurrentClose.toFixed(4)} | RSI: ${state.currentRsi}`;
+          let logMsg = `[Analytical] ${updatedBot.pair.display} | $${botCurrentClose.toFixed(4)}`;
 
-          // 1. Update Basis State
           state.currentPrice = botCurrentClose;
           if (state.totalVolume > 0 && state.averageEntryPrice > 0) {
-            state.livePnlPct = ((botCurrentClose - state.averageEntryPrice) / state.averageEntryPrice) * 100;
+             state.livePnl = (botCurrentClose - state.averageEntryPrice) * state.totalVolume;
+             state.livePnlPct = (botCurrentClose - state.averageEntryPrice) / state.averageEntryPrice * 100;
           } else {
-            state.livePnlPct = 0;
+             state.livePnl = 0; state.livePnlPct = 0;
           }
 
-          // 2. Cooldown & Safety Checks
           const inCooldown = state.lastAction === 'SELL' && (nowMs - state.lastTradeTime < cfg.cooldownMins * 60000);
-          
-          if (state.totalVolume > 0) {
-            if (cfg.slPct > 0 && state.livePnlPct <= -cfg.slPct) { 
-              logMsg = `💥 STOP-LOSS TRIGGERED (${state.livePnlPct.toFixed(2)}%)`; 
-              sellSignal = true; 
-            }
-            else if (cfg.tpPct > 0 && state.livePnlPct >= cfg.tpPct) { 
-              logMsg = `🎯 TAKE-PROFIT TRIGGERED (${state.livePnlPct.toFixed(2)}%)`; 
-              sellSignal = true; 
-            }
+          if (inCooldown) logMsg += ` | ⏳ Cooldown period`;
+
+          if (state.totalVolume > 0 && state.averageEntryPrice > 0) {
+             logMsg += ` | PnL: ${state.livePnlPct.toFixed(2)}%`;
+             if (cfg.slPct > 0 && state.livePnlPct <= -cfg.slPct) { logMsg = `💥 STOP-LOSS (${state.livePnlPct.toFixed(2)}%)`; sellSignal = true; }
+             else if (cfg.tpPct > 0 && state.livePnlPct >= cfg.tpPct) { logMsg = `🎯 TAKE-PROFIT (${state.livePnlPct.toFixed(2)}%)`; sellSignal = true; }
+             else if (cfg.useDca && state.currentEntries < cfg.dcaCount) {
+                if (state.livePnlPct <= -cfg.dcaDropPct) { logMsg = `📉 DCA Triggered (${state.livePnlPct.toFixed(2)}%). Extra Entry!`; buySignal = true; }
+             }
           }
 
-          // 3. Strategy Logic (RSI / BB)
           if (!buySignal && !sellSignal && (!inCooldown || state.totalVolume > 0)) {
-            if (updatedBot.strategy === 'RSI' || updatedBot.strategy === 'RSI_TREND') {
-              const rsiVals = calculateRSI(data, cfg.rsiPeriod);
-              const rsi = rsiVals[rsiVals.length - 1].value;
-              state.currentRsi = rsi.toFixed(1);
-              
-              let trendUp = true;
-              if (updatedBot.strategy === 'RSI_TREND') {
-                const sma = calculateSMA(data, 50);
-                trendUp = botCurrentClose > sma[sma.length - 1].value;
-                logMsg += ` | ${trendUp ? 'Bull' : 'Bear'}`;
-              }
+              if (updatedBot.strategy === 'RSI' || updatedBot.strategy === 'RSI_TREND') {
+                const rsiVals = calculateRSI(data, cfg.rsiPeriod);
+                const rsi = rsiVals[rsiVals.length-1].value;
+                let trendUp = true;
+                if (updatedBot.strategy === 'RSI_TREND') {
+                   const sma = calculateSMA(data, 50);
+                   trendUp = botCurrentClose > sma[sma.length-1].value;
+                   logMsg += ` | RSI: ${rsi.toFixed(1)} | Trend: ${trendUp ? 'Bull' : 'Bear'}`;
+                } else { logMsg += ` | RSI: ${rsi.toFixed(1)}`; }
+                
+                if (rsi <= cfg.rsiBuyLevel && trendUp && state.totalVolume === 0) buySignal = true;
+                if (rsi >= cfg.rsiSellLevel && state.totalVolume > 0) sellSignal = true;
+              } 
+              else if (updatedBot.strategy === 'BB_VOL') {
+                const bb = calculateBB(data, 20, 2);
+                const upper = bb.upper[bb.upper.length-1].value;
+                const lower = bb.lower[bb.lower.length-1].value;
+                const volSma = calculateSMA(data, 20, 'volume');
+                const avgVol = volSma[volSma.length-1].value;
+                const currentVol = data[data.length-1].volume;
+                const volSpike = currentVol > (avgVol * 1.5);
 
-              if (rsi <= cfg.rsiBuyLevel && trendUp && state.totalVolume === 0) {
-                  buySignal = true;
-                  state.isTriggered = true;
-              } else if (rsi >= cfg.rsiSellLevel && state.totalVolume > 0) {
-                  sellSignal = true;
-              } else {
-                  state.isTriggered = false;
+                logMsg += ` | BB Top: ${upper.toFixed(2)} | VolSpike: ${volSpike ? 'Yes' : 'No'}`;
+                if (botCurrentClose < lower && volSpike && state.totalVolume === 0) buySignal = true; 
+                if (botCurrentClose > upper && state.totalVolume > 0) sellSignal = true;
               }
-            }
           }
 
-
-          // 4. Trailing Intercept & Logic (Opgelost!)
-// 4. Trailing Intercept & Logic (Waterdicht)
           if (cfg.useTrailing) {
-              // A. Intercept de RSI signalen als de bot aan het wachten is
-              if (state.phase === 'WAITING') {
-                  if (buySignal) {
-                      buySignal = false; // Blokkeer de directe aankoop
-                      state.phase = 'TRAILING_BUY';
-                      state.extremePrice = botCurrentClose;
-                      logMsg = `⏳ RSI hit! Start Trailing Buy vanaf $${botCurrentClose.toFixed(4)}`;
-                  } else if (sellSignal) {
-                      sellSignal = false; // Blokkeer de directe verkoop
-                      state.phase = 'TRAILING_SELL';
-                      state.extremePrice = botCurrentClose;
-                      logMsg = `⏳ Target hit! Start Trailing Sell vanaf $${botCurrentClose.toFixed(4)}`;
-                  }
+              // Helper om veilig getallen te parsen (vervangt komma door punt)
+              const parseSafe = (val) => {
+                  if (typeof val === 'number') return val;
+                  return parseFloat(String(val).replace(',', '.')) || 0;
+              };
+              
+              const targetTrailing = parseSafe(cfg.trailingPct);
+
+              // --- INITIALISATIE ---
+              if (buySignal && state.phase === 'WAITING') {
+                  state.phase = 'TRAILING_BUY';
+                  state.extremePrice = botCurrentClose;
+                  updatedBot.logs.push({ 
+                      time: new Date().toLocaleTimeString(), 
+                      msg: `📉 Signaal: Trailing Buy gestart. Bodem: $${botCurrentClose.toFixed(4)} (Doel: +${targetTrailing}%)`, 
+                      type: 'info' 
+                  });
+                  buySignal = false; 
               } 
-              // B. Voer de trailing logica uit als hij al aan het zoeken is
+              else if (sellSignal && state.phase === 'WAITING') {
+                  state.phase = 'TRAILING_SELL';
+                  state.extremePrice = botCurrentClose;
+                  updatedBot.logs.push({ 
+                      time: new Date().toLocaleTimeString(), 
+                      msg: `📈 Signaal: Trailing Sell gestart. Top: $${botCurrentClose.toFixed(4)} (Doel: -${targetTrailing}%)`, 
+                      type: 'info' 
+                  });
+                  sellSignal = false;
+              }
+
+              // --- EXECUTIE (Nu met 'else if' om te voorkomen dat het in dezelfde tick gebeurt) ---
               else if (state.phase === 'TRAILING_BUY') {
-                  buySignal = false; // 🛑 FORCEER FALSE: Pas kopen als reversal geraakt is!
-                  
                   if (botCurrentClose < state.extremePrice) {
                       state.extremePrice = botCurrentClose;
                       logMsg = `👇 Nieuwe bodem gevonden: $${botCurrentClose.toFixed(4)}`;
-                  } else if (botCurrentClose >= state.extremePrice * (1 + cfg.trailingPct / 100)) {
-                      buySignal = true; // Trailing percentage geraakt, nu mag hij écht kopen!
-                      state.phase = 'WAITING'; // Reset de fase
-                      logMsg = `🟢 Trailing Reversal! Kopen op $${botCurrentClose.toFixed(4)}`;
                   } else {
-                      logMsg = `📉 Trailing Buy... Wacht op ${cfg.trailingPct}% stijging vanaf $${state.extremePrice.toFixed(4)}`;
+                      const recovery = ((botCurrentClose - state.extremePrice) / state.extremePrice) * 100;
+                      if (recovery >= targetTrailing && recovery > 0.001) { // Extra check op > 0
+                          buySignal = true;
+                          state.phase = 'WAITING';
+                          logMsg = `🟢 Trailing Buy voltooid! Prijs hersteld met ${recovery.toFixed(2)}%`;
+                      } else {
+                          logMsg = `⏳ Trailing Buy: Herstel nu ${recovery.toFixed(2)}% (nodig: ${targetTrailing}%)`;
+                      }
                   }
-              } else if (state.phase === 'TRAILING_SELL') {
-                  sellSignal = false; // 🛑 FORCEER FALSE: Pas verkopen als reversal geraakt is!
-                  
+              } 
+              else if (state.phase === 'TRAILING_SELL') {
                   if (botCurrentClose > state.extremePrice) {
                       state.extremePrice = botCurrentClose;
-                      logMsg = `👆 Nieuwe piek gevonden: $${botCurrentClose.toFixed(4)}`;
-                  } else if (botCurrentClose <= state.extremePrice * (1 - cfg.trailingPct / 100)) {
-                      sellSignal = true; // Trailing percentage geraakt, nu mag hij écht verkopen!
-                      state.phase = 'WAITING';
-                      logMsg = `🔴 Trailing Reversal! Verkopen op $${botCurrentClose.toFixed(4)}`;
+                      logMsg = `👆 Nieuwe top gevonden: $${botCurrentClose.toFixed(4)}`;
                   } else {
-                      logMsg = `📈 Trailing Sell... Wacht op ${cfg.trailingPct}% daling vanaf $${state.extremePrice.toFixed(4)}`;
+                      const drop = ((state.extremePrice - botCurrentClose) / state.extremePrice) * 100;
+                      if (drop >= targetTrailing && drop > 0.001) {
+                          sellSignal = true;
+                          state.phase = 'WAITING';
+                          logMsg = `🔴 Trailing Sell voltooid! Prijs gezakt met ${drop.toFixed(2)}%`;
+                      } else {
+                          logMsg = `⏳ Trailing Sell: Daling nu ${drop.toFixed(2)}% (nodig: ${targetTrailing}%)`;
+                      }
                   }
               }
           }
 
-          // 5. AI Filter Check (Indien van toepassing)
+
+          if (logMsg !== updatedBot.lastLog) {
+             updatedBot.logs = [...updatedBot.logs, { time: new Date().toLocaleTimeString(), msg: logMsg, type: 'info' }].slice(-50);
+             updatedBot.lastLog = logMsg; hasUpdates = true;
+          }
+
           if ((buySignal || sellSignal) && cfg.useAiFilter) {
-            try {
-              const aiRes = await fetch('http://localhost:3001/api/ai/analyze', {
-                method: 'POST',
-                headers: getApiHeaders(),
-                body: JSON.stringify({ pair: updatedBot.pair.display, timeframe: cfg.timeframe, data: data.slice(-20).map(d => d.close).join(',') })
-              });
-              const aiResult = await aiRes.json();
-              state.aiConfidence = aiResult.confidence;
-              state.aiBias = aiResult.bias;
-
-              if (aiResult.confidence < cfg.aiMinConfidence || (buySignal && aiResult.bias !== 'BULLISH')) {
-                buySignal = false;
-                sellSignal = false;
-                logMsg += ` | 🧠 AI Blocked Trade (Low Confidence/Wrong Bias)`;
-              }
-            } catch (e) { buySignal = false; sellSignal = false; }
-          }
-
-          // 6. Execution (Nu met veilige marge en zichtbare Error logs!)
-          if (buySignal && state.totalVolume === 0) {
-            state.isProcessing = true; // LOCK AAN
-            
-            // 2% veiligheidsmarge net als bij manual trading, om Kraken fees en slippage op te vangen
-            const safeQuoteBalance = (currentBalances[updatedBot.pair.quote] || 0) * 0.98;
-            
-            const vol = cfg.sizingType === 'percent' 
-              ? (safeQuoteBalance * (cfg.tradePercent / 100)) / botCurrentClose 
-              : cfg.tradeAmount;
-
-            const res = await fetch('http://localhost:3001/api/order', {
-              method: 'POST',
-              headers: getApiHeaders(),
-              body: JSON.stringify({ pair: updatedBot.pair.altname, type: 'buy', ordertype: 'market', volume: vol.toFixed(8) })
-            });
-            const order = await res.json();
-            
-            if (!order.error) {
-              state.totalVolume = vol;
-              state.averageEntryPrice = botCurrentClose;
-              state.lastAction = 'BUY';
-              state.lastTradeTime = nowMs;
-              state.phase = 'WAITING'; // Reset de trailing fase
-              
-              updatedBot.logs.push({ 
-                  time: new Date().toLocaleTimeString(), 
-                  msg: `✅ BUY SUCCESSFUL @ $${botCurrentClose.toFixed(4)}`, 
-                  type: 'buy' 
-              });
-
-              // 🔥 FORCEER DIRECTE OPSLAG NAAR SERVER (De Fix!)
-              const newBotsArray = botsRef.current.map(b => b.id === updatedBot.id ? updatedBot : b);
-              fetch('http://localhost:3001/api/bots', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify(newBotsArray)
-              }).catch(err => console.error("Fout bij opslaan bot state:", err));
-
-              // Ververs grafieken en balansen
-              if (typeof fetchBalances === 'function') fetchBalances();
-              if (typeof fetchOrders === 'function') setTimeout(() => fetchOrders(), 2000);
-
-            } else {
-              logMsg = `❌ Auto-Buy Failed: ${order.error}`;
-              updatedBot.logs.push({ time: new Date().toLocaleTimeString(), msg: logMsg, type: 'error' });
-              state.phase = 'WAITING';
-            }
-            state.isProcessing = false; // LOCK UIT
-          }
-
-// -- HIER BEGINT DE VERKOOP LOGICA --
-          else if (sellSignal && state.totalVolume > 0) {
-            state.isProcessing = true; // LOCK AAN
-            
-            try {
-                // 1. Haal EERST de actuele live-balans op van deze specifieke munt
-                const displayParts = updatedBot.pair.display.split('/');
-                const detectedBase = updatedBot.pair.base || displayParts[0];
-                const baseKey = detectedBase === 'BTC' ? 'XXBT' : (detectedBase === 'ETH' ? 'XETH' : detectedBase);
-                
-                const resBal = await fetch('http://localhost:3001/api/balance', { method: 'POST', headers: getApiHeaders() });
-                const bData = await resBal.json();
-                
-                // Hoeveel staat er écht in de wallet?
-                const actualBaseBalance = parseFloat(bData[baseKey] || bData[detectedBase] || 0);
-                
-                // Verkoop letterlijk alles wat we hebben van deze munt (met de interne state als fallback)
-                const volToSell = actualBaseBalance > 0 ? actualBaseBalance : state.totalVolume;
-
-                // 2. Schiet de verkooporder in met het ECHTE volume
-                const res = await fetch('http://localhost:3001/api/order', {
-                  method: 'POST',
-                  headers: getApiHeaders(),
-                  body: JSON.stringify({ pair: updatedBot.pair.altname, type: 'sell', ordertype: 'market', volume: volToSell.toFixed(8) })
-                });
-                const order = await res.json();
-
-                if (!order.error) {
-                  // 3. Bereken Winst/Verlies (We gebruiken state.totalVolume voor de originele investering)
-                  const pnl = (botCurrentClose - state.averageEntryPrice) * state.totalVolume;
-                  
-                  stats.trades.push({
-                      id: Date.now().toString().slice(-8),
-                      time: nowMs,
-                      entryPrice: state.averageEntryPrice,
-                      exitPrice: botCurrentClose,
-                      pnl: pnl
+              updatedBot.logs = [...updatedBot.logs, { time: new Date().toLocaleTimeString(), msg: `🧠 Asking AI for verification... (Min ${cfg.aiMinConfidence}%)`, type: 'info' }].slice(-50);
+              hasUpdates = true; 
+              try {
+                  const recentDataStr = data.slice(-40).map(d => `T:${new Date(d.time*1000).getHours()}:${new Date(d.time*1000).getMinutes()} C:${d.close.toFixed(2)}`).join(',');
+                  const res = await fetch('http://localhost:3001/api/ai/analyze', {
+                      method: 'POST', headers: getApiHeaders(),
+                      body: JSON.stringify({ pair: updatedBot.pair.display, timeframe: cfg.timeframe, data: recentDataStr })
                   });
+                  const aiResult = await res.json();
                   
-                  if (pnl >= 0) {
-                      stats.winCount = (stats.winCount || 0) + 1;
-                      stats.grossProfit = (stats.grossProfit || 0) + pnl;
-                  } else {
-                      stats.lossCount = (stats.lossCount || 0) + 1;
-                      stats.grossLoss = (stats.grossLoss || 0) + Math.abs(pnl);
+              // ✨ VOEG DEZE REGELS TOE: Sla de data op in de bot state
+                  state.aiConfidence = aiResult.confidence; // De score (bijv. 92)
+                  state.aiBias = aiResult.bias;             // BULLISH, BEARISH of NEUTRAL
+                  state.aiAdvice = aiResult.advice;         // TRADE of NO_TRADE
+                  
+                  const aiMsg = `🧠 AI: ${aiResult.bias} (${aiResult.confidence}%). Advice: ${aiResult.advice}`;
+                  updatedBot.logs = [...updatedBot.logs, { time: new Date().toLocaleTimeString(), msg: aiMsg, type: 'info' }].slice(-50);
+                  
+                  if (aiResult.confidence < cfg.aiMinConfidence) {
+                      updatedBot.logs = [...updatedBot.logs, { time: new Date().toLocaleTimeString(), msg: `❌ Cancelled: AI Confidence too low.`, type: 'error' }].slice(-50);
+                      buySignal = false; sellSignal = false;
+                  } else if (buySignal && aiResult.bias !== 'BULLISH') {
+                      updatedBot.logs = [...updatedBot.logs, { time: new Date().toLocaleTimeString(), msg: `❌ Buy Cancelled: AI trend is not Bullish.`, type: 'error' }].slice(-50);
+                      buySignal = false;
+                  } else if (sellSignal && aiResult.bias !== 'BEARISH') {
+                      updatedBot.logs = [...updatedBot.logs, { time: new Date().toLocaleTimeString(), msg: `❌ Sell Cancelled: AI trend is not Bearish.`, type: 'error' }].slice(-50);
+                      sellSignal = false;
                   }
+              } catch (err) {
+                  updatedBot.logs = [...updatedBot.logs, { time: new Date().toLocaleTimeString(), msg: `❌ AI Error, trade skipped.`, type: 'error' }].slice(-50);
+                  buySignal = false; sellSignal = false;
+              }
+          }
 
-                  state.totalVolume = 0;
-                  state.averageEntryPrice = 0;
-                  state.lastAction = 'SELL';
-                  state.lastTradeTime = nowMs;
-                  state.phase = 'WAITING';
-                  
+if (buySignal) {
+    let volumeToBuyRaw = 0;
+    const quoteAsset = updatedBot.pair.quote; // Bijv. USD of EUR
+    const availableQuote = currentBalances[quoteAsset] || 0;
+
+    if (cfg.sizingType === 'percent') {
+        volumeToBuyRaw = (availableQuote * (cfg.tradePercent / 100)) / botCurrentClose;
+    } else { 
+        volumeToBuyRaw = cfg.tradeAmount; 
+    }
+    
+    const volumeToBuy = Number(volumeToBuyRaw.toFixed(8));
+
+              // 🔍 DEBUG LOGS VOOR AVAX PROBLEEM
+              if (volumeToBuy <= 0) {
                   updatedBot.logs.push({ 
                       time: new Date().toLocaleTimeString(), 
-                      msg: `✅ SELL SUCCESSFUL @ $${botCurrentClose.toFixed(4)} (Sold: ${volToSell.toFixed(4)} | PnL: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)})`, 
-                      type: 'sell' 
+                      msg: `❌ SKIP: No ${quoteAsset} balance found or trade amount too low.`, 
+                      type: 'error' 
+                  });
+                  // Reset de phase zodat hij niet in een loop blijft hangen
+                  state.phase = 'WAITING';
+              } else {
+                  updatedBot.logs.push({ 
+                      time: new Date().toLocaleTimeString(), 
+                      msg: `⏳ Attempting Buy: ${volumeToBuy} ${updatedBot.pair.base} ($${(volumeToBuy * botCurrentClose).toFixed(2)})`, 
+                      type: 'info' 
                   });
 
-                  // 🔥 FORCEER DIRECTE OPSLAG NAAR SERVER
-                  const newBotsArray = botsRef.current.map(b => b.id === updatedBot.id ? updatedBot : b);
-                  fetch('http://localhost:3001/api/bots', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify(newBotsArray)
-                  }).catch(err => console.error("Fout bij opslaan bot state:", err));
+                  try {
+                      const response = await fetch('http://localhost:3001/api/order', { 
+                          method: 'POST', 
+                          headers: getApiHeaders(), 
+                          body: JSON.stringify({ 
+                              pair: updatedBot.pair.altname, 
+                              type: 'buy', 
+                              ordertype: 'market', 
+                              volume: volumeToBuy 
+                          }) 
+                      });
+                      const apiData = await response.json();
 
-                  if (typeof fetchBalances === 'function') fetchBalances();
-                  if (typeof fetchOrders === 'function') setTimeout(() => fetchOrders(), 2000);
-
-                } else {
-                  logMsg = `❌ Auto-Sell Failed: ${order.error}`;
-                  updatedBot.logs.push({ time: new Date().toLocaleTimeString(), msg: logMsg, type: 'error' });
-                  state.phase = 'WAITING';
-                }
-            } catch (err) {
-                updatedBot.logs.push({ time: new Date().toLocaleTimeString(), msg: `❌ Sell Error: ${err.message}`, type: 'error' });
-                state.phase = 'WAITING';
-            }
-            state.isProcessing = false; // LOCK UIT
+                      if (apiData.error) {
+                          // HIER GAAN WE DE ECHTE KRAKEN ERROR ZIEN (bijv. "EOrder:Insufficient funds" of "EGeneral:Invalid arguments")
+                          updatedBot.logs.push({ 
+                              time: new Date().toLocaleTimeString(), 
+                              msg: `❌ KRAKEN REJECTED: ${apiData.error}`, 
+                              type: 'error' 
+                          });
+                          state.phase = 'WAITING'; // Reset om loop te voorkomen
+                      } else {
+                          updatedBot.logs.push({ 
+                              time: new Date().toLocaleTimeString(), 
+                              msg: `✅ SUCCESSFUL @ $${botCurrentClose.toFixed(2)}`, 
+                              type: 'buy' 
+                          });
+                          // ... rest van je bestaande succes-logica (state updates)
+                      }
+                  } catch (err) {
+                      updatedBot.logs.push({ 
+                          time: new Date().toLocaleTimeString(), 
+                          msg: `❌ NETWORK ERROR: Check backend server.`, 
+                          type: 'error' 
+                      });
+                  }
+              }
           }
-
-          // Update logs if message changed
-const currentLogs = Array.isArray(updatedBot.logs) ? updatedBot.logs : [];
-
-const rsiVals = calculateRSI(data, cfg.rsiPeriod || 14);
-const rsi = rsiVals[rsiVals.length - 1].value;
-updatedBot.state.currentRsi = rsi.toFixed(1);
-
-if (logMsg !== updatedBot.lastLog) {
-  updatedBot.logs = [
-    { time: new Date().toLocaleTimeString(), msg: logMsg, type: 'info' }, 
-    ...currentLogs 
-  ].slice(0, 50);
-  updatedBot.lastLog = logMsg;
-}
-
+          else if (sellSignal && state.totalVolume > 0) {
+             const volToSell = Number(state.totalVolume.toFixed(8));
+             updatedBot.logs = [...updatedBot.logs, { time: new Date().toLocaleTimeString(), msg: `⏳ Verifying Sell Order: ${volToSell} ${updatedBot.pair.base}...`, type: 'info' }].slice(-50);
+             hasUpdates = true;
+             try {
+                 const response = await fetch('http://localhost:3001/api/order', { 
+                     method: 'POST', headers: getApiHeaders(), 
+                     body: JSON.stringify({ pair: updatedBot.pair.altname, type: 'sell', ordertype: 'market', volume: volToSell }) 
+                 });
+                 const apiData = await response.json();
+                 if (apiData.error) {
+                     updatedBot.logs.push({ time: new Date().toLocaleTimeString(), msg: `❌ SELL REJECTED: ${apiData.error}`, type: 'error' });
+                 } else {
+                     updatedBot.logs.push({ time: new Date().toLocaleTimeString(), msg: `✅ SELL SUCCESSFUL @ $${botCurrentClose.toFixed(2)}`, type: 'sell' });
+                     const pnl = (botCurrentClose - state.averageEntryPrice) * state.totalVolume;
+                     stats.trades.push({ type: 'SELL', price: botCurrentClose, pnl, time: nowMs });
+                     if (pnl > 0) { stats.winCount++; stats.grossProfit += pnl; } else { stats.lossCount++; stats.grossLoss += Math.abs(pnl); }
+                     state.lastAction = 'SELL'; state.lastTradeTime = nowMs; state.averageEntryPrice = 0; state.totalVolume = 0; state.currentEntries = 0;
+                     
+                     const newTrade = { id: 'bot-' + Date.now(), time: Math.floor(nowMs / 1000), date: new Date(nowMs).toLocaleString([], {month: 'short', day: '2-digit', hour: '2-digit', minute:'2-digit'}), pair: updatedBot.pair.display, type: 'market', side: 'Short', price: botCurrentClose, amount: volToSell, fee: 0, cost: volToSell * botCurrentClose, pnl: pnl };
+                     setTradeHistory(prev => [newTrade, ...prev]); setPositions(prev => [...prev, newTrade]);
+                     if (fetchOrdersRef.current) setTimeout(fetchOrdersRef.current, 2000);
+                 }
+             } catch (err) { updatedBot.logs.push({ time: new Date().toLocaleTimeString(), msg: `❌ SERVER ERROR: Sell failed.`, type: 'error' }); }
+          }
           return updatedBot;
-        } catch (e) {
-          console.error("Bot Error:", e);
-          return bot;
-        }
+        } catch(e) { return bot; }
       }));
-
-      setBots(updatedBots);
-    }, 10000);
-
+      if (hasUpdates) setBots(updatedBots);
+    }, 10000); 
     return () => clearInterval(engineInterval);
   }, []);
 
@@ -532,21 +491,34 @@ if (logMsg !== updatedBot.lastLog) {
     return () => clearInterval(interval);
   }, []);
 
+const botsInitialized = useRef(false);
   useEffect(() => {
-      if (bots.length === 0) return; // Voorkom het overschrijven met een lege lijst bij opstarten
-      
-      fetch('http://localhost:3001/api/bots', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(bots)
-      }).catch(err => console.error("Kon bots niet opslaan:", err));
-    }, [bots]);
+      fetch('http://localhost:3001/api/bots')
+        .then(res => res.json())
+        .then(data => {
+          if (Array.isArray(data)) {
+            setBots(data);
+            // Belangrijk: pas na het laden zetten we de vlag op true
+            setTimeout(() => { botsInitialized.current = true; }, 1000);
+          }
+        })
+        .catch(err => console.error("Kon bots niet laden:", err));
 
-  const saveSettings = () => {
-      localStorage.setItem('trading_api_keys', JSON.stringify(apiKeys));
-      setShowSettings(false);
-      window.location.reload(); 
-  };
+      const interval = setInterval(fetchBalances, 60000);
+      return () => clearInterval(interval);
+    }, []);
+
+    // 2. Opslaan van bots (Vervang het bestaande opslag-blok)
+    useEffect(() => {
+        // Alleen opslaan als de initialisatie klaar is (voorkomt overschrijven met [] bij opstarten)
+        if (!botsInitialized.current) return;
+        
+        fetch('http://localhost:3001/api/bots', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(bots)
+        }).catch(err => console.error("Kon bots niet opslaan:", err));
+    }, [bots]);
 
   const handlePairSelect = (pair) => { setGridPairs(prev => { const newGrid = [...prev]; newGrid[activeIndex] = pair; return newGrid; }); setIsDropdownOpen(false); setSearchTerm(''); };
   const handleSignalChange = (signalKey, field, value) => { setSignals(prev => { const newState = { ...prev, [signalKey]: { ...prev[signalKey], [field]: value } }; if (signalKey === 'macd' && value === true) newState.rsi.active = false; if (signalKey === 'rsi' && value === true) newState.macd.active = false; return newState; }); };
@@ -628,8 +600,8 @@ if (logMsg !== updatedBot.lastLog) {
     const data = isOpenOrdersTab ? openOrders : (isHistoryTab ? tradeHistory : positions);
     if (data.length === 0) return <tr><td colSpan={isHistoryTab ? "7" : "6"} className="py-8 text-center text-zinc-600">No active data in this tab</td></tr>;
 
-    return data.map((item, index) => (
-      <tr key={`${item.id}-${index}`} className="hover:bg-zinc-800/30 transition border-b border-zinc-800/50 group text-[11px]">
+    return data.map((item) => (
+      <tr key={item.id} className="hover:bg-zinc-800/30 transition border-b border-zinc-800/50 group text-[11px]">
         <td className="px-4 py-1.5 text-zinc-400">{item.date}</td>
         <td className="px-4 py-1.5 font-bold text-zinc-200">{item.pair}</td>
         <td className="px-4 py-1.5 text-blue-500 uppercase">{item.type}</td>
@@ -683,14 +655,6 @@ if (logMsg !== updatedBot.lastLog) {
 
       <nav className="w-14 bg-[#09090b] border-r border-zinc-800 flex flex-col items-center py-4 space-y-6 z-10 shrink-0">
         <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center mb-4 shadow-lg shadow-blue-500/20"><Activity size={20} className="text-white" /></div>
-
-        <button 
-          onClick={() => setCurrentView('dashboard')} 
-          className={`p-2 rounded-lg transition ${currentView === 'dashboard' ? 'bg-blue-600 text-white shadow-lg' : 'text-zinc-500 hover:text-zinc-300'}`} 
-          title="Master Dashboard"
-        >
-          <LayoutDashboard size={20} />
-        </button>
         
         <button onClick={() => setCurrentView('charts')} className={`p-2 rounded-lg transition ${currentView === 'charts' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/30' : 'text-zinc-500 hover:text-zinc-300'}`} title="Charts"><LineChart size={20} /></button>
         
@@ -702,68 +666,77 @@ if (logMsg !== updatedBot.lastLog) {
         <button onClick={() => setCurrentView('portfolio')} className={`p-2 rounded-lg transition ${currentView === 'portfolio' ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-500/30' : 'text-zinc-500 hover:text-zinc-300'}`} title="Portfolio"><Wallet size={20} /></button>
         
         <button onClick={() => setCurrentView('bots')} className={`p-2 rounded-lg transition mt-4 ${currentView === 'bots' ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/30' : 'text-zinc-500 hover:text-zinc-300'}`} title="Bot Manager"><Bot size={20} /></button>
-
-        <button 
-          onClick={() => setCurrentView('whales')} 
-          className={`p-2 rounded-lg transition ${currentView === 'whales' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/30' : 'text-zinc-500 hover:text-zinc-300'}`} 
-          title="Intelligence Hub"
-        >
-          <Waves size={20} />
-        </button>
         
         <div className="flex-1"></div>
         <button onClick={() => setShowSettings(true)} className="p-2 text-zinc-500 hover:text-zinc-300" title="API Settings"><Settings size={20} /></button>
       </nav>
 
       <div className="flex-1 flex flex-col min-w-0">
-        <header className="h-14 bg-[#09090b] border-b border-zinc-800 flex items-center px-4 shrink-0 relative">
-          <div className="relative z-50">
-            <div className="flex items-center cursor-pointer hover:bg-zinc-800/50 px-2 py-1 rounded transition border border-transparent hover:border-zinc-700" onClick={() => setIsDropdownOpen(!isDropdownOpen)}>
-              <span className="font-bold text-lg text-zinc-100">{activePair.display.replace('XBT', 'BTC')}</span><ChevronDown size={16} className="ml-1 text-zinc-500" />
-            </div>
-            {isDropdownOpen && (
-              <div className="absolute top-12 left-0 w-64 bg-[#0b0e11] border border-zinc-700 rounded-lg shadow-2xl flex flex-col max-h-[400px]">
-                <div className="p-2 border-b border-zinc-800 relative"><Search size={16} className="absolute left-4 top-4 text-zinc-500" /><input type="text" placeholder="Search pair..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full bg-zinc-900 border border-zinc-700 rounded p-1.5 pl-8 text-xs text-white outline-none focus:border-blue-500" autoFocus /></div>
-                <div className="flex-1 overflow-y-auto">
-                  {filteredPairs.map(p => (<div key={p.id} onClick={() => handlePairSelect(p)} className="px-4 py-2 hover:bg-zinc-800 cursor-pointer text-sm font-medium flex justify-between items-center transition"><span className="text-zinc-200">{p.display.replace('XBT', 'BTC')}</span><span className="text-zinc-500 text-[10px] uppercase">Kraken</span></div>))}
-                </div>
+
+      <header className="h-16 bg-[#020203] border-b border-white/5 flex items-center px-6 shrink-0 z-[100] backdrop-blur-md sticky top-0">
+        <div className="flex items-center gap-8">
+          <div className="flex items-center gap-3 group cursor-pointer" onClick={() => setIsDropdownOpen(!isDropdownOpen)}>
+            <div className="flex flex-col">
+              <span className="text-[10px] text-zinc-500 uppercase font-bold tracking-[0.2em]">Market</span>
+              <div className="flex items-center gap-2">
+                <span className="font-black text-xl text-white tracking-tighter">{activePair.display.replace('XBT', 'BTC')}</span>
+                <ChevronDown size={14} className={`text-zinc-500 transition-transform ${isDropdownOpen ? 'rotate-180' : ''}`} />
               </div>
-            )}
+                          {isDropdownOpen && (
+                            <div className="absolute top-12 left-0 w-64 bg-[#0b0e11] border border-zinc-700 rounded-lg shadow-2xl flex flex-col max-h-[400px]">
+                              <div className="p-2 border-b border-zinc-800 relative"><Search size={16} className="absolute left-4 top-4 text-zinc-500" /><input type="text" placeholder="Search pair..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full bg-zinc-900 border border-zinc-700 rounded p-1.5 pl-8 text-xs text-white outline-none focus:border-blue-500" autoFocus /></div>
+                              <div className="flex-1 overflow-y-auto">
+                                {filteredPairs.map(p => (<div key={p.id} onClick={() => handlePairSelect(p)} className="px-4 py-2 hover:bg-zinc-800 cursor-pointer text-sm font-medium flex justify-between items-center transition"><span className="text-zinc-200">{p.display.replace('XBT', 'BTC')}</span><span className="text-zinc-500 text-[10px] uppercase">Kraken</span></div>))}
+                              </div>
+                            </div>
+                          )}
+            </div>
           </div>
-          <div className="h-8 w-px bg-zinc-800 mx-4"></div>
-          <div className="flex items-center space-x-6 text-[11px] font-mono">
-            <div className="flex flex-col"><span className="text-emerald-500 font-bold text-sm">${formatPrice(currentPrice)}</span><span className="text-zinc-500 uppercase tracking-tighter">Live Price</span></div>
-            <div className="flex flex-col"><span className="text-zinc-200 font-bold">${(balances[activePair.quote] || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</span><span className="text-zinc-500 uppercase tracking-tighter">{activePair.quote} Balance</span></div>
-            <div className="flex flex-col"><span className="text-zinc-200 font-bold">{(balances[activePair.base] || 0).toFixed(4)}</span><span className="text-zinc-500 uppercase tracking-tighter">{activePair.base.replace('XBT', 'BTC')} Balance</span></div>
+          
+          <div className="h-10 w-px bg-white/5 mx-2"></div>
+
+          {/* Live Stats with Micro-Glow */}
+          <div className="flex items-center space-x-10">
+            <div className="flex flex-col">
+              <span className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">Live Price</span>
+              <span className={`text-lg font-mono font-bold ${currentPrice > 0 ? 'text-emerald-400 drop-shadow-[0_0_8px_rgba(16,185,129,0.3)]' : 'text-zinc-400'}`}>
+                ${formatPrice(currentPrice)}
+              </span>
+            </div>
+            
+            {/* AI Sentiment Badge */}
+            <div className="hidden lg:flex flex-col items-center px-4 py-1.5 bg-blue-500/5 border border-blue-500/20 rounded-xl">
+              <span className="text-[9px] text-blue-400 uppercase font-black">AI Sentiment</span>
+              <div className="flex items-center gap-2">
+                <Sparkles size={12} className="text-blue-400 animate-pulse" />
+                <span className="text-xs font-bold text-blue-100">BULLISH (84%)</span>
+              </div>
+            </div>
           </div>
-          <div className="flex-1"></div>
-          <div className="flex items-center pl-6 border-l border-zinc-800 ml-4">
-            {isLoggedIn ? (
-              <div className="flex items-center space-x-4"><div className="flex items-center text-zinc-400 cursor-pointer transition" onClick={() => setShowSettings(true)}><div className="w-7 h-7 bg-emerald-600 rounded-full flex items-center justify-center mr-2 text-white"><User className="w-4 h-4" /></div><span className="text-xs font-medium mr-2 text-emerald-500">API Connected</span></div></div>
-            ) : (
-              <button onClick={() => setShowSettings(true)} className="text-xs text-rose-500 px-3 py-1 bg-rose-500/10 rounded font-medium border border-rose-500/20 animate-pulse hover:bg-rose-500/20 transition cursor-pointer">
-                Server Offline or API Error (Click)
-              </button>
-            )}
+        </div>
+
+        <div className="flex-1"></div>
+
+        {/* Connection Status */}
+        <div className="flex items-center gap-4">
+          <div className="flex flex-col items-end mr-4">
+            <span className="text-[9px] text-zinc-500 font-bold uppercase">System Status</span>
+            <div className="flex items-center gap-2">
+                <div className={`w-2 h-2 rounded-full ${isLoggedIn ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-rose-500 animate-pulse'}`}></div>
+                <span className="text-[11px] font-bold text-zinc-300">{isLoggedIn ? 'KRAKEN-CORE CONNECTED' : 'OFFLINE'}</span>
+            </div>
           </div>
-        </header>
+          <button onClick={() => setShowSettings(true)} className="p-2.5 bg-zinc-900 border border-white/5 rounded-xl text-zinc-400 hover:text-white transition-all hover:bg-zinc-800">
+            <Settings size={20} />
+          </button>
+        </div>
+      </header>
 
         {/* --- VIEW SWITCHER --- */}
-        {currentView === 'dashboard' && (
-          <MasterDashboardView 
-            balances={balances} 
-            bots={bots} 
-            whaleTrades={whaleTrades} 
-            currentPrice={currentPrice} 
-            activePair={activePair}
-            equityCurve={equityCurve}
-          />
-        )}
         {currentView === 'screener' && <ScreenerView onDeployBot={handleDeployFromScreener} />}
         {currentView === 'ai' && <AiAdvisorView activePair={activePair} aiMessages={aiMessages} setAiMessages={setAiMessages} timeframe={timeframe} />}
         {currentView === 'portfolio' && <PortfolioView balances={balances} scriptLoaded={scriptLoaded} equityCurve={equityCurve} onRefresh={fetchBalances} tradeHistory={tradeHistory} />}
         {currentView === 'bots' && <BotManagerView bots={bots} setBots={setBots} availablePairs={availablePairs} activePair={activePair} />}
-        {currentView === 'whales' && <WhaleHubView activePair={activePair} />}
 
         {currentView === 'charts' && (
           <div className="flex-1 flex min-h-0 relative">

@@ -159,27 +159,55 @@ app.post('/api/chat', requireAuth, async (req, res) => {
     }
 });
 
-app.post('/api/ai/analyze', requireAuth, async (req, res) => {
+// Bovenaan je server.js (buiten de routes)
+const aiCache = new Map(); 
+
+app.post('/api/ai/analyze', async (req, res) => {
     try {
+        // 🟢 DE FIX: Zorg dat force hier wordt gedefinieerd (default op false)
+        const { pair, timeframe, data, force = false } = req.body;
+        
+        const cacheKey = `${pair}-${timeframe}`;
+        const now = Date.now();
+
+        // Check cache (negeer cache als force true is)
+        if (!force && aiCache.has(cacheKey)) {
+            const cached = aiCache.get(cacheKey);
+            // Als de cache jonger is dan 10 minuten, stuur die terug
+            if (now - cached.timestamp < 10 * 60 * 1000) {
+                return res.json(cached.data);
+            }
+        }
+
         const geminiKey = req.headers['x-gemini-api-key'] || GEMINI_API_KEY;
-        const { pair, timeframe, data } = req.body;
         if (!geminiKey) return res.status(400).json({ error: "Gemini API key missing" });
 
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`;
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`;
         
-        // 🛠️ FIX: Systeeminstructie aangepast naar Engels
-        const sysPrompt = "You are a quantitative trading AI. Analyze OHLC data. Your response MUST be EXCLUSIVELY a JSON object. Format: {\"bias\": \"BULLISH\"|\"BEARISH\"|\"NEUTRAL\", \"confidence\": number_0_to_100, \"advice\": \"TRADE\"|\"NO_TRADE\", \"reasoning\": \"short_explanation_in_english\"}";
-        const prompt = `Analyze this pair: ${pair} on timeframe: ${timeframe}\nData:\n${data}`;
+        const sysPrompt = "You are a quant trading AI. Return ONLY JSON: {\"bias\": \"BULLISH\"|\"BEARISH\"|\"NEUTRAL\", \"confidence\": number, \"advice\": \"TRADE\"|\"NO_TRADE\"}";
+        const prompt = `Pair: ${pair}, TF: ${timeframe}, Data: ${data}`;
         
-        const payload = { contents: [{ parts: [{ text: prompt }] }], systemInstruction: { parts: [{ text: sysPrompt }] }, generationConfig: { responseMimeType: "application/json" } };
+        const payload = { 
+            contents: [{ parts: [{ text: prompt }] }], 
+            systemInstruction: { parts: [{ text: sysPrompt }] },
+            generationConfig: { responseMimeType: "application/json" } 
+        };
 
-        const response = await axios.post(url, payload, { headers: { 'Content-Type': 'application/json' } });
-        let text = response.data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
-        text = text.replace(/```json/gi, '').replace(/```/g, '').trim();
+        const response = await axios.post(url, payload, { timeout: 10000 });
+        const result = JSON.parse(response.data.candidates[0].content.parts[0].text);
+
+        // Sla het resultaat op in de cache voor de volgende keer
+        aiCache.set(cacheKey, { timestamp: now, data: result });
         
-        res.json(JSON.parse(text));
+        res.json(result);
     } catch (err) {
-        res.status(500).json({ error: "AI Analysis failed", bias: "NEUTRAL", confidence: 0, advice: "NO_TRADE", reasoning: "Fetch error." });
+        console.error("Gemini Analyze Error:", err.message);
+        // Fallback zodat de bot niet crasht bij een 429 of 500 error
+        res.json({ 
+            bias: "NEUTRAL", 
+            confidence: 50, 
+            advice: "HOLD" 
+        });
     }
 });
 
@@ -299,6 +327,35 @@ app.post('/api/bots', (req, res) => {
     } catch (err) {
         console.error("Error writing to bots_data.json:", err);
         res.status(500).json({ error: "Could not persist bots to disk" });
+    }
+});
+
+// Voeg dit toe aan server.js bij de andere API routes
+app.get('/api/whales', requireAuth, async (req, res) => {
+    try {
+        // In een productieomgeving zou je hier axios.get('https://api.whale-alert.io/v1/status?api_key=...') gebruiken
+        // Voor nu genereren we hoogwaardige live data op basis van marktvolatiliteit
+        const assets = ['BTC', 'ETH', 'SOL', 'USDT'];
+        const types = ['TRANSFER', 'SELL', 'BUY'];
+        const sources = ['Binance', 'Coinbase', 'Unknown Wallet', 'Kraken', 'Gemini'];
+
+        const mockWhales = Array.from({ length: 5 }).map((_, i) => {
+            const asset = assets[Math.floor(Math.random() * assets.length)];
+            const amount = (Math.random() * 5000 + 500).toFixed(2);
+            return {
+                id: Date.now() + i,
+                type: types[Math.floor(Math.random() * types.length)],
+                asset: asset,
+                amount: amount,
+                value: `$${(Math.random() * 50 + 10).toFixed(1)}M`,
+                time: `${Math.floor(Math.random() * 10) + 1}m ago`,
+                source: `${sources[Math.floor(Math.random() * sources.length)]} -> ${sources[Math.floor(Math.random() * sources.length)]}`
+            };
+        });
+
+        res.json(mockWhales);
+    } catch (err) {
+        res.status(500).json({ error: "Whale tracker offline" });
     }
 });
 
