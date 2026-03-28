@@ -87,6 +87,8 @@ const BotLogTerminal = ({ logs }) => {
   );
 };
 
+
+
 // ==========================================
 // 🤖 MAIN BOT MANAGER VIEW
 // ==========================================
@@ -330,15 +332,18 @@ const handleManualTrade = async (botId, side) => {
             
             // 🔥 FIX 3: Gecrashte variabelen (nowMs en pnl) gefixt
             const pnl = (currentPrice - bot.state.averageEntryPrice) * volToSell;
+            const pnlPct = ((botCurrentClose - state.averageEntryPrice) / state.averageEntryPrice) * 100;
             
             bot.logs.push({ time: new Date().toLocaleTimeString(), msg: `✅ MANUAL SELL SUCCESS @ $${currentPrice.toFixed(4)}`, type: 'sell' });
-            bot.stats.trades.push({ 
-                id: Date.now().toString().slice(-8), 
-                time: Date.now(), 
-                entryPrice: bot.state.averageEntryPrice, 
-                exitPrice: currentPrice, 
-                pnl: pnl 
-            });
+            stats.trades.push({
+                  id: Date.now().toString().slice(-8),
+                  time: new Date().toLocaleString(), // Datum en tijd
+                  entryPrice: state.averageEntryPrice,
+                  exitPrice: botCurrentClose,
+                  volume: state.totalVolume,
+                  pnl: pnl,
+                  pnlPct: pnlPct
+              });
             bot.state.totalVolume = 0; 
             bot.state.averageEntryPrice = 0;
         }
@@ -355,6 +360,8 @@ const handleManualTrade = async (botId, side) => {
 };
 
   const setAllBotsState = (isRunning) => setBots(bots.map(b => ({ ...b, isRunning })));
+
+  
 
   return (
     <div className="flex-1 flex flex-col bg-[#050505] h-full overflow-y-auto">
@@ -596,8 +603,14 @@ const handleManualTrade = async (botId, side) => {
                  return (
                     <div 
                       key={bot.id} 
-                      className={`relative transition-all duration-500 ... ${
-                        bot.state?.isTriggered ? 'ring-4 ring-blue-500 shadow-[0_0_40px_rgba(59,130,246,0.6)] scale-[1.02]' : 'border-white/5'
+                      className={`relative p-6 rounded-3xl border transition-all duration-500 overflow-hidden ${
+                        bot.state?.phase === 'TRAILING_BUY' 
+                          ? 'border-blue-500 shadow-[0_0_30px_rgba(59,130,246,0.3)] bg-blue-500/5 scale-[1.01]' 
+                          : bot.state?.phase === 'TRAILING_SELL'
+                          ? 'border-purple-500 shadow-[0_0_30px_rgba(168,85,247,0.3)] bg-purple-500/5 scale-[1.01]'
+                          : bot.state?.isTriggered
+                          ? 'border-blue-500/50 shadow-[0_0_20px_rgba(59,130,246,0.2)] bg-blue-500/5'
+                          : 'border-white/5 bg-[#0b0e11]'
                       }`}
                     >
                       {/* Subtiele achtergrond glow */}
@@ -751,28 +764,6 @@ const handleManualTrade = async (botId, side) => {
                          </div>
                      </div>
 
-                     {/* HISTORY */}
-                     <div className="flex flex-col">
-                        <div className="flex justify-between items-center mb-3 px-1">
-                           <span className="text-xs text-zinc-500 uppercase font-bold tracking-widest flex items-center gap-1.5"><History size={12}/> Trade History</span>
-                        </div>
-                        <div className="space-y-2 max-h-36 overflow-y-auto pr-1 [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-thumb]:bg-zinc-800">
-                           {tradesLen === 0 ? <p className="text-[10px] text-zinc-700 italic py-4 text-center border border-dashed border-zinc-800 rounded-xl">Geen trades voltooid.</p> : [...stats.trades].reverse().map((t, i) => (
-                              <div key={i} className="flex justify-between items-center bg-[#050505] p-3 rounded-xl border border-zinc-800/40">
-                                 <div className="flex flex-col space-y-1">
-                                    <span className="text-zinc-600 text-[10px] font-mono opacity-50">{t.id || 'Manual-TRX'}</span>
-                                    <span className="text-zinc-400 text-[11px] font-bold">In: <span className="font-mono text-zinc-200">${(t.entryPrice || 0).toFixed(4)}</span></span>
-                                 </div>
-                                 <div className="flex flex-col items-end space-y-1">
-                                    <span className={`text-[10px] font-bold font-mono ${(t.pnl || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{(t.pnl || 0) >= 0 ? '+' : ''}${(t.pnl || 0).toFixed(2)}</span>
-                                    <span className="text-zinc-500 text-[11px]">Uit: <span className="font-mono">${(t.exitPrice || 0).toFixed(4)}</span></span>
-                                 </div>
-                              </div>
-                           ))}
-                        </div>
-                     </div>
-
-
 
                       {aiSuggestion && (
                         <div className="mt-4 p-4 bg-gradient-to-br from-indigo-900/40 to-purple-900/40 border border-indigo-500/50 rounded-2xl animate-in slide-in-from-top-4 duration-500">
@@ -818,6 +809,46 @@ const handleManualTrade = async (botId, side) => {
                              <Hand size={12}/> Force Sell
                          </button>
                      </div>
+
+                     
+
+                     {/* HISTORY */}
+                      {/* COMPLETED TRADES OVERVIEW */}
+                      {/* Zoek de trade history loop in BotManagerView.jsx */}
+                      {[...stats.trades].reverse().map((t, i) => {
+                        // We definiëren hier veilige constanten met fallbacks
+                        const displayEntry = t.entryPrice || 0;
+                        const displayExit = t.exitPrice || 0; // Gebruik t.exitPrice net als entryPrice
+                        const displayPnL = t.pnl || 0;
+                        const displayPct = t.pnlPct || 0;
+
+                        return (
+                          <div key={i} className="bg-[#050505] border border-zinc-800/60 rounded-xl overflow-hidden mb-3">
+                            <div className="flex justify-between items-center px-3 py-2 bg-zinc-900/30 border-b border-zinc-800/40">
+                              <span className="text-[9px] font-mono text-zinc-500">{t.time || 'Trade Picked Up'}</span>
+                              <span className={`text-[10px] font-black ${displayPnL >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                                {displayPnL >= 0 ? '+' : ''}${displayPnL.toFixed(2)} ({displayPct.toFixed(2)}%)
+                              </span>
+                            </div>
+                            
+                            <div className="p-3 grid grid-cols-2 gap-4">
+                              <div className="flex flex-col">
+                                <span className="text-[8px] text-zinc-600 uppercase font-bold tracking-widest">Entry</span>
+                                <span className="text-[11px] font-mono text-zinc-300">${displayEntry.toFixed(4)}</span>
+                              </div>
+                              <div className="flex flex-col items-end">
+                                <span className="text-[8px] text-zinc-600 uppercase font-bold tracking-widest">Exit</span>
+                                <span className="text-[11px] font-mono text-zinc-300">
+                                  {/* Als exitPrice 0 is (oude trade), toon dan 'N/A' of 0.0000 */}
+                                  ${displayExit > 0 ? displayExit.toFixed(4) : '0.0000'}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+
+
                   </div>
                  );
               })}
