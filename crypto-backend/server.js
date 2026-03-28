@@ -32,6 +32,57 @@ const getMessageSignature = (path, request, secret, nonce) => {
 };
 
 // ==========================================
+// 🔵 COINBASE ADVANCED TRADE API
+// ==========================================
+app.post('/api/coinbase/balance', async (req, res) => {
+    try {
+        const cbKey = req.headers['x-cb-api-key']?.trim();
+        const cbSecret = req.headers['x-cb-api-secret']?.trim();
+
+        if (!cbKey || !cbSecret) return res.json([]);
+
+        const timestamp = Math.floor(Date.now() / 1000).toString();
+        const method = 'GET';
+        const path = '/api/v3/brokerage/accounts';
+        const message = timestamp + method + path;
+        
+        const signature = crypto.createHmac('sha256', cbSecret)
+                                .update(message)
+                                .digest('hex');
+
+        const response = await axios.get(`https://api.coinbase.com${path}`, {
+            headers: {
+                'CB-ACCESS-KEY': cbKey,
+                'CB-ACCESS-SIGN': signature,
+                'CB-ACCESS-TIMESTAMP': timestamp,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        if (response.data && response.data.accounts) {
+            const activeAccounts = response.data.accounts
+                .filter(a => parseFloat(a.available_balance.value) > 0)
+                .map(a => ({
+                    currency: a.currency,
+                    amount: parseFloat(a.available_balance.value),
+                    exchange: 'Coinbase'
+                }));
+            res.json(activeAccounts);
+        } else {
+            res.json([]);
+        }
+    } catch (err) {
+        // KIJK HIER: Dit print de ECHTE reden in je Node.js zwarte scherm (terminal)
+        if (err.response) {
+            console.error("🔥 Coinbase API Reject:", JSON.stringify(err.response.data));
+        } else {
+            console.error("🔥 Network Error:", err.message);
+        }
+        res.json([]); // Voorkom dat de frontend crasht
+    }
+});
+
+// ==========================================
 // 🛡️ REQUEST QUEUE (Wachtrij)
 // ==========================================
 let lastKrakenNonce = 0;

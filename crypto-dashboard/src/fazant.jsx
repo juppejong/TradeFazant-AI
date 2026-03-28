@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import ReactDOM from 'react-dom';
 import { calculateSMA, calculateEMA, calculateMACD, calculateBB, calculateRSI } from './utils/indicators';
-import { tfMap, getApiHeaders, fetchKrakenPairs, fetchKrakenOHLC } from './utils/api';
+import { tfMap, getApiHeaders, fetchKrakenPairs, fetchKrakenOHLC, fetchCoinbaseBalances } from './utils/api';
 import PortfolioView from './components/PortfolioView';
 import WhaleHubView from './components/WhaleHubView';
 import AiAdvisorView from './components/AiAdvisorView';
@@ -37,8 +37,11 @@ export default function TradingDashboard() {
 
   const [showSettings, setShowSettings] = useState(false);
   const [apiKeys, setApiKeys] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('trading_api_keys')) || { krakenKey: '', krakenSecret: '', geminiKey: '' }; }
-    catch { return { krakenKey: '', krakenSecret: '', geminiKey: '' }; }
+    try { 
+      return JSON.parse(localStorage.getItem('trading_api_keys')) || 
+      { krakenKey: '', krakenSecret: '', geminiKey: '', cbKey: '', cbSecret: '' }; 
+    }
+    catch { return { krakenKey: '', krakenSecret: '', geminiKey: '', cbKey: '', cbSecret: '' }; }
   });
   
   const [aiMessages, setAiMessages] = useState([{ role: 'model', text: `Hello! I am your Google Gemini Trading Advisor.` }]);
@@ -469,20 +472,41 @@ if (logMsg !== updatedBot.lastLog) {
   // ==========================================
   const fetchBalances = async () => {
     try {
-      const res = await fetch('http://localhost:3001/api/balance', { method: 'POST', headers: getApiHeaders(), body: JSON.stringify({}) });
-      const data = await res.json();
-      if (data.error) throw new Error(data.error.join ? data.error.join(', ') : data.error);
+      let combinedBalances = {};
+
+      // --- 1. KRAKEN FETCH ---
+      const resK = await fetch('http://localhost:3001/api/balance', { 
+        method: 'POST', 
+        headers: getApiHeaders() 
+      });
+      const dataK = await resK.json();
       
-      const newBalances = { ...balances };
-      let cleanBalances = {};
-      Object.keys(data).forEach(k => { 
+      if (!dataK.error) {
+        Object.keys(dataK).forEach(k => { 
           let cleanKey = k.replace('Z', '').replace('X', ''); 
           if (k === 'ZUSD') cleanKey = 'USD'; 
           if (k === 'XXBT') cleanKey = 'BTC'; 
-          newBalances[cleanKey] = parseFloat(data[k]); 
-          cleanBalances[cleanKey] = parseFloat(data[k]);
-      });
-      setBalances(newBalances); 
+          combinedBalances[cleanKey] = (combinedBalances[cleanKey] || 0) + parseFloat(dataK[k]); 
+        });
+      }
+
+      // --- 2. COINBASE FETCH ---
+      try {
+        const cbData = await fetchCoinbaseBalances();
+        if (Array.isArray(cbData)) {
+          cbData.forEach(acc => {
+            const key = acc.currency === 'XBT' ? 'BTC' : acc.currency;
+            combinedBalances[key] = (combinedBalances[key] || 0) + acc.amount;
+          });
+        }
+      } catch (e) { 
+        // VOEG DEZE LOG TOE:
+        console.error("DEBUG COINBASE ERROR:", e); 
+        console.warn("Coinbase balance could not be loaded, skipping..."); 
+      }
+
+      // --- 3. STATE UPDATE ---
+      setBalances(combinedBalances);
       setIsLoggedIn(true);
 
       let estTotal = cleanBalances['USD'] || 0;
@@ -680,6 +704,19 @@ if (logMsg !== updatedBot.lastLog) {
                   <label className="text-[10px] uppercase text-zinc-500 font-bold">Kraken API Secret</label>
                   <input type="password" value={apiKeys.krakenSecret} onChange={e => setApiKeys({...apiKeys, krakenSecret: e.target.value})} className="w-full bg-[#050505] border border-zinc-800 rounded p-2 text-sm text-white outline-none focus:border-blue-500" placeholder="Leave blank for backend default" />
                 </div>
+
+                <div className="h-px bg-zinc-800/50 my-2"></div>
+                <div className="space-y-1">
+                  <label className="text-[10px] uppercase text-zinc-500 font-bold flex items-center gap-2">
+                    <div className="w-2 h-2 bg-blue-500 rounded-full"></div> Coinbase API Key
+                  </label>
+                  <input type="text" value={apiKeys.cbKey} onChange={e => setApiKeys({...apiKeys, cbKey: e.target.value})} className="w-full bg-[#050505] border border-zinc-800 rounded p-2 text-sm text-white outline-none focus:border-blue-500" placeholder="Coinbase Advanced Key" />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] uppercase text-zinc-500 font-bold">Coinbase API Secret</label>
+                  <input type="password" value={apiKeys.cbSecret} onChange={e => setApiKeys({...apiKeys, cbSecret: e.target.value})} className="w-full bg-[#050505] border border-zinc-800 rounded p-2 text-sm text-white outline-none focus:border-blue-500" placeholder="Coinbase Secret" />
+                </div>
+
                 <div className="h-px bg-zinc-800/50 my-2"></div>
                 <div className="space-y-1">
                   <label className="text-[10px] uppercase text-zinc-500 font-bold">Gemini API Key (Optional for AI)</label>

@@ -50,3 +50,30 @@ export const fetchKrakenOHLC = async (interval, pairAltname) => {
     }));
   } catch (error) { return []; }
 };
+
+// src/utils/api.js
+export const fetchCoinbaseBalances = async () => {
+  let keys = { cbKey: '', cbSecret: '' };
+  try {
+    const stored = localStorage.getItem('trading_api_keys');
+    if (stored) keys = JSON.parse(stored);
+  } catch (e) {
+    console.error("LocalStorage error", e);
+  }
+
+  // De fetch MOET naar je lokale server gaan, niet direct naar Coinbase!
+  const res = await fetch('http://localhost:3001/api/coinbase/balance', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-cb-api-key': (keys.cbKey || '').trim(),
+      'x-cb-api-secret': (keys.cbSecret || '').trim()
+    }
+  });
+
+  if (!res.ok) {
+    throw new Error(`Server responded with ${res.status}`);
+  }
+
+  return await res.json();
+};
