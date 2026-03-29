@@ -338,7 +338,7 @@ const BotManagerView = ({ bots, setBots, availablePairs, activePair, setActivePa
                 const resBal = await fetch(`${API_BASE}/api/balance`, { method: 'POST', headers: getApiHeaders() });
                 const bData = await resBal.json();
                 const baseKey = cleanBase === 'BTC' ? 'XXBT' : (cleanBase === 'ETH' ? 'XETH' : cleanBase);
-                actualBaseBalance = parseFloat(bData[baseKey] || bData[cleanBase] || 0);
+                actualBaseBalance = parseFloat(bData[baseKey] || bData[cleanBase] || bData['X' + cleanBase] || 0);
             }
 
             const volToSell = Math.min(Number(bot.state.totalVolume.toFixed(8)), actualBaseBalance);
