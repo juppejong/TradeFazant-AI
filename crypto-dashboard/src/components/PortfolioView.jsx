@@ -2,41 +2,52 @@ import React, { useEffect, useRef, useMemo, useState } from 'react';
 import { 
   TrendingUp, Activity, ArrowUpRight, ArrowDownRight, BarChart3, 
   RefreshCw, History, ShieldCheck, Gauge, Target, Sparkles,
-  Zap, Briefcase, ChevronRight, Globe, ShieldAlert
+  Zap, Briefcase, ChevronRight, Globe, ShieldAlert, Database
 } from 'lucide-react';
 
+const exchangeMap = {
+    'Kraken': { text: 'text-purple-400', bg: 'bg-purple-500/10', dot: 'bg-purple-500' },
+    'Coinbase': { text: 'text-blue-400', bg: 'bg-blue-500/10', dot: 'bg-blue-500' }
+};
 
 const PortfolioView = ({ balances, scriptLoaded, equityCurve, onRefresh, tradeHistory = [] }) => {
   const [isSyncing, setIsSyncing] = useState(false);
   const [timeRange, setTimeRange] = useState('ALL');
   const [livePrices, setLivePrices] = useState({});
 
-  // 1. 🔑 GEMINI API CHECK
-  const hasGemini = useMemo(() => {
+  // 1. 🔑 API CHECKS VOOR MULTI-EXCHANGE UI
+  const apiStatus = useMemo(() => {
     try {
       const keys = JSON.parse(localStorage.getItem('trading_api_keys') || '{}');
-      return !!keys.geminiKey;
-    } catch (e) { return false; }
+      return {
+        gemini: !!keys.geminiKey,
+        kraken: !!keys.krakenKey,
+        coinbase: !!keys.cbKey
+      };
+    } catch (e) { 
+      return { gemini: false, kraken: false, coinbase: false }; 
+    }
   }, []);
 
-  // 2. 🛠️ DUST FILTER (Jouw originele logica)
-  const activeBalances = useMemo(() => {
-    return Object.entries(balances || {}).filter(([coin, amount]) => {
-      const val = parseFloat(amount);
-      return !isNaN(val) && val > 0.01; 
-    }).map(([coin, amount]) => ({
-        coin: coin.replace('XXBT', 'BTC').replace('ZUSD', 'USD').replace('XETH', 'ETH'),
-        amount: parseFloat(amount)
-    }));
+  // 2. 🛠️ DATA NORMALISATIE (Ondersteunt zowel Array als Object van fazant.jsx)
+  const balancesArray = useMemo(() => {
+    if (Array.isArray(balances)) {
+      return balances;
+    }
+    // Fallback voor als fazant.jsx nog het oude object stuurt
+    return Object.entries(balances || {}).map(([coin, amount]) => {
+      let cleanCoin = coin.replace('XXBT', 'BTC').replace('ZUSD', 'USD').replace('XETH', 'ETH');
+      return { currency: cleanCoin, amount: parseFloat(amount), exchange: 'Kraken' };
+    });
   }, [balances]);
 
-  // 🚀 NIEUW: Haal de actuele prijzen op van Kraken om de ECHTE allocatie te berekenen
+  // 3. 🚀 LIVE PRIJZEN OPHALEN
   useEffect(() => {
     const fetchPrices = async () => {
-      const cryptos = activeBalances.filter(b => b.coin !== 'USD').map(b => b.coin);
+      // Haal unieke cryptomunten op (alles behalve USD)
+      const cryptos = [...new Set(balancesArray.filter(b => b.currency !== 'USD').map(b => b.currency))];
       if (cryptos.length === 0) return;
       
-      // Vertaal BTC naar XBT voor de Kraken API en maak paren (bijv. XBTUSD, SOLUSD)
       const pairs = cryptos.map(c => `${c === 'BTC' ? 'XBT' : c}USD`).join(',');
       
       try {
@@ -45,7 +56,6 @@ const PortfolioView = ({ balances, scriptLoaded, equityCurve, onRefresh, tradeHi
         
         if (!data.error || data.error.length === 0) {
           const newPrices = {};
-          // Koppel de Kraken namen (zoals XXBTZUSD of SOLUSD) terug aan jouw portfolio munten
           Object.keys(data.result).forEach(key => {
             cryptos.forEach(coin => {
               const searchCoin = coin === 'BTC' ? 'XBT' : coin;
@@ -60,17 +70,56 @@ const PortfolioView = ({ balances, scriptLoaded, equityCurve, onRefresh, tradeHi
     };
 
     fetchPrices();
-    const interval = setInterval(fetchPrices, 15000); // Update elke 15 seconden
+    const interval = setInterval(fetchPrices, 15000); 
     return () => clearInterval(interval);
-  }, [activeBalances]);
+  }, [balancesArray]);
   
+  // 4. 🧩 ALLOCATION EN TOTALE WAARDE BEREKENEN
+  const { allocationMatrix, currentTotalUsdValue } = useMemo(() => {
+      if (balancesArray.length === 0) return { allocationMatrix: [], currentTotalUsdValue: 0 };
+
+      let totalUsd = 0;
+      const matrix = [];
+
+      // Bereken USD waarde per asset
+      balancesArray.forEach(b => {
+          let usdValue = 0;
+          if (b.currency === 'USD') {
+              usdValue = b.amount;
+          } else {
+              const price = livePrices[b.currency] || 0;
+              usdValue = b.amount * price;
+          }
+
+          if (usdValue > 0.1) { // Dust filter (alleen assets > $0.10)
+              totalUsd += usdValue;
+              matrix.push({
+                  coin: b.currency,
+                  amount: b.amount,
+                  exchange: b.exchange || 'Unknown',
+                  usdValue: usdValue
+              });
+          }
+      });
+
+      // Voeg gewicht (weight) toe en sorteer
+      matrix.forEach(item => {
+          item.weight = totalUsd > 0 ? (item.usdValue / totalUsd) * 100 : 0;
+      });
+
+      return {
+          allocationMatrix: matrix.sort((a, b) => b.usdValue - a.usdValue),
+          currentTotalUsdValue: totalUsd
+      };
+  }, [balancesArray, livePrices]);
+
+  // 5. 📈 DATA CLEANING VOOR GRAFIEK
   const safeEquityCurve = Array.isArray(equityCurve) ? equityCurve : [];
   
-  // 3. 📈 JOUW ROBUUSTE DATA CLEANING (Tegen de $24,000 spikes)
   const cleanedCurve = useMemo(() => {
       if (!safeEquityCurve.length) {
           const now = Math.floor(Date.now() / 1000);
-          return [{ time: now - 86400, value: 0 }, { time: now, value: 0 }];
+          return [{ time: now - 86400, value: currentTotalUsdValue || 0 }, { time: now, value: currentTotalUsdValue || 0 }];
       }
 
       const uniqueMap = new Map();
@@ -79,40 +128,20 @@ const PortfolioView = ({ balances, scriptLoaded, equityCurve, onRefresh, tradeHi
 
       if (sorted.length < 2) return sorted;
 
-      const values = sorted.map(s => s.value);
-      const sortedVals = [...values].sort((a, b) => a - b);
-      const median = sortedVals[Math.floor(sortedVals.length / 2)];
-      
-      let filtered = [];
-      let lastValid = sorted[0].value;
-
-      for (let i = 0; i < sorted.length; i++) {
-          const val = sorted[i].value;
-          const isExtremeOutlier = median > 0 && (val > median * 10 || val < median / 10);
-          const isSuddenJump = lastValid > 0 && (val > lastValid * 5 || val < lastValid / 5);
-
-          if (isExtremeOutlier && isSuddenJump && i > 0 && i < sorted.length - 1) {
-              filtered.push({ ...sorted[i], value: lastValid });
-          } else {
-              filtered.push(sorted[i]);
-              if (val > 0) lastValid = val;
-          }
-      }
-
       const now = Math.floor(Date.now() / 1000);
       let cutoff = 0;
       if (timeRange === '1D') cutoff = now - 86400;
       else if (timeRange === '1W') cutoff = now - 604800;
       else if (timeRange === '1M') cutoff = now - 2592000;
 
-      const results = cutoff > 0 ? filtered.filter(p => p.time >= cutoff) : filtered;
-      return results.length < 2 && filtered.length >= 2 ? filtered.slice(-2) : results;
-  }, [safeEquityCurve, timeRange]);
+      const results = cutoff > 0 ? sorted.filter(p => p.time >= cutoff) : sorted;
+      return results.length < 2 && sorted.length >= 2 ? sorted.slice(-2) : results;
+  }, [safeEquityCurve, timeRange, currentTotalUsdValue]);
 
-  // 4. 📊 PERFORMANCE STATS & RISK CALCULATION
+  // 6. 📊 PERFORMANCE STATS
   const stats = useMemo(() => {
-    const current = cleanedCurve[cleanedCurve.length - 1]?.value || 0;
-    const start = cleanedCurve[0]?.value || 0;
+    const current = currentTotalUsdValue;
+    const start = cleanedCurve[0]?.value || current; // Voorkom delen door nul bij lege array
     const pnl = current - start;
     const pnlPct = start > 0 ? (pnl / start) * 100 : 0;
 
@@ -124,39 +153,11 @@ const PortfolioView = ({ balances, scriptLoaded, equityCurve, onRefresh, tradeHi
     const grossLoss = Math.abs(tradeHistory.reduce((acc, t) => acc + (t.pnl < 0 ? t.pnl : 0), 0));
     const profitFactor = grossLoss > 0 ? (grossProfit / grossLoss).toFixed(2) : (grossProfit > 0 ? '∞' : '0.00');
 
-    // Dynamische Risk Score
-    const assetCount = activeBalances.length;
+    const assetCount = allocationMatrix.length;
     const technicalRisk = Math.min(100, Math.max(10, (100 - (assetCount * 15)) + (Math.abs(pnlPct) / 2)));
 
     return { current, pnl, pnlPct, winRate, profitFactor, totalTrades, technicalRisk };
-  }, [cleanedCurve, tradeHistory, activeBalances]);
-
-  // 5. 🧩 ALLOCATION LOGICA (Gerepareerd)
-// 5. 🧩 ALLOCATION LOGICA (Nu berekend op basis van ECHTE USD waarde!)
-  const allocation = useMemo(() => {
-      let realTotalUsd = parseFloat(balances.ZUSD || balances.USD || 0);
-      
-      // Stap 1: Bereken de keiharde USD waarde van elke munt in je wallet
-      const assetsWithUsdValue = activeBalances.map(b => {
-          if (b.coin === 'USD') {
-              return { ...b, usdValue: parseFloat(b.amount) };
-          } else {
-              const price = livePrices[b.coin] || 0; 
-              const usdValue = b.amount * price;
-              realTotalUsd += usdValue;
-              return { ...b, usdValue };
-          }
-      });
-
-      const finalTotal = realTotalUsd > 0 ? realTotalUsd : 1;
-
-      // Stap 2: Bereken het werkelijke percentage en sorteer van groot naar klein
-      return assetsWithUsdValue.map(b => {
-          const weight = (b.usdValue / finalTotal) * 100;
-          return { ...b, weight: Math.min(100, Math.max(0, weight)).toFixed(1) };
-      }).sort((a, b) => parseFloat(b.weight) - parseFloat(a.weight));
-      
-  }, [activeBalances, balances, livePrices]);
+  }, [cleanedCurve, tradeHistory, allocationMatrix, currentTotalUsdValue]);
 
   // 📉 CHART CONFIG
   const chartContainerRef = useRef(null);
@@ -188,21 +189,26 @@ const PortfolioView = ({ balances, scriptLoaded, equityCurve, onRefresh, tradeHi
   return (
     <div className="flex-1 flex flex-col bg-[#020203] h-full overflow-y-auto custom-scrollbar font-sans">
       
-      {/* 🚀 BLOOMBERG NAV */}
+      {/* 🚀 MULTI-EXCHANGE NAV */}
       <div className="h-16 border-b border-white/5 flex items-center px-8 bg-[#09090b]/50 backdrop-blur-xl sticky top-0 z-50 justify-between">
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-6">
             <div className="w-10 h-10 bg-indigo-600/10 rounded-xl flex items-center justify-center border border-indigo-500/20 shadow-[0_0_15px_rgba(99,102,241,0.1)]">
-                <Globe className="text-indigo-400 w-5 h-5 animate-spin-slow" />
+                <Database className="text-indigo-400 w-5 h-5" />
             </div>
             <div>
-               <h2 className="text-white font-black tracking-tighter text-sm uppercase">Institutional Terminal</h2>
-               <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-1">
-                 <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></div> Kraken Core Active
-               </span>
+               <h2 className="text-white font-black tracking-tighter text-sm uppercase">Multi-Exchange Hub</h2>
+               <div className="flex items-center gap-3 mt-1">
+                 <span className={`text-[9px] font-bold uppercase tracking-widest flex items-center gap-1 ${apiStatus.kraken ? 'text-purple-400' : 'text-zinc-700'}`}>
+                   <div className={`w-1.5 h-1.5 rounded-full ${apiStatus.kraken ? 'bg-purple-500 animate-pulse' : 'bg-zinc-800'}`}></div> Kraken
+                 </span>
+                 <span className={`text-[9px] font-bold uppercase tracking-widest flex items-center gap-1 ${apiStatus.coinbase ? 'text-blue-400' : 'text-zinc-700'}`}>
+                   <div className={`w-1.5 h-1.5 rounded-full ${apiStatus.coinbase ? 'bg-blue-500 animate-pulse' : 'bg-zinc-800'}`}></div> Coinbase
+                 </span>
+               </div>
             </div>
         </div>
         <button onClick={() => { setIsSyncing(true); onRefresh().finally(() => setIsSyncing(false)); }} className="flex items-center gap-2 px-4 py-2 bg-zinc-900 border border-white/5 rounded-xl text-[10px] font-black text-zinc-400 hover:text-white transition-all uppercase tracking-widest">
-            <RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''} /> Synchronize
+            <RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''} /> Aggregate
         </button>
       </div>
 
@@ -216,7 +222,7 @@ const PortfolioView = ({ balances, scriptLoaded, equityCurve, onRefresh, tradeHi
                 <div className="absolute top-0 right-0 w-96 h-96 bg-indigo-500/5 blur-[120px] pointer-events-none transition-colors"></div>
                 <div className="flex justify-between items-end mb-8 relative z-10">
                     <div>
-                        <span className="text-[10px] font-black text-zinc-500 uppercase tracking-[0.2em] mb-2 block">Total Equity (USD)</span>
+                        <span className="text-[10px] font-black text-zinc-500 uppercase tracking-[0.2em] mb-2 block">Aggregated Equity (USD)</span>
                         <div className="flex items-baseline gap-4">
                             <span className="text-6xl font-mono text-white font-black tracking-tighter">${stats.current.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                             <div className={`flex items-center gap-1 px-3 py-1 rounded-full text-[11px] font-black ${stats.pnl >= 0 ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`}>
@@ -234,11 +240,11 @@ const PortfolioView = ({ balances, scriptLoaded, equityCurve, onRefresh, tradeHi
                 <div className="h-[320px]" ref={chartContainerRef}></div>
             </div>
 
-            {/* 🧠 RISK ADVISOR PANEL (MET DE VOLATILITY/DIVERSIFICATION BLOKJES) */}
+            {/* 🧠 RISK ADVISOR PANEL */}
             <div className="bg-[#09090b] border border-white/5 rounded-[2.5rem] p-8 flex flex-col relative overflow-hidden shadow-2xl">
                 <div className="flex items-center gap-3 mb-8">
-                    <div className={`p-2.5 rounded-xl ${hasGemini ? 'bg-indigo-500/10 text-indigo-400' : 'bg-zinc-800 text-zinc-500'}`}>
-                        {hasGemini ? <Sparkles size={20} className="animate-pulse" /> : <ShieldAlert size={20} />}
+                    <div className={`p-2.5 rounded-xl ${apiStatus.gemini ? 'bg-indigo-500/10 text-indigo-400' : 'bg-zinc-800 text-zinc-500'}`}>
+                        {apiStatus.gemini ? <Sparkles size={20} className="animate-pulse" /> : <ShieldAlert size={20} />}
                     </div>
                     <h3 className="text-xs font-black text-white uppercase tracking-widest">Risk Advisor</h3>
                 </div>
@@ -257,21 +263,20 @@ const PortfolioView = ({ balances, scriptLoaded, equityCurve, onRefresh, tradeHi
                     <div className="p-5 bg-white/[0.02] border border-white/5 rounded-2xl">
                         <span className="text-[9px] font-black text-zinc-500 uppercase block mb-3">Insights</span>
                         <p className="text-[11px] text-zinc-300 leading-relaxed font-medium">
-                            {hasGemini 
-                                ? "Gemini is analyzing market correlations and your current asset exposure... All systems look optimal for current volatility levels."
-                                : "Technical Engine: Portfolio is concentrated in " + activeBalances.length + " assets. Risk is balanced but diversification could be improved."}
+                            {apiStatus.gemini 
+                                ? "Gemini is analyzing multi-exchange correlations. Aggregated exposure looks optimal across connected wallets."
+                                : "Aggregated Portfolio: Concentrated in " + allocationMatrix.length + " assets across your connected exchanges."}
                         </p>
                     </div>
 
-                    {/* ✨ HIER ZIJN DE GEZOCHTE BLOKJES: VOLATILITY & DIVERSIFICATION */}
                     <div className="grid grid-cols-2 gap-3">
                          <div className="bg-black/40 p-4 rounded-xl border border-white/5">
-                            <span className="text-[8px] text-zinc-500 uppercase font-black block mb-1 tracking-tighter">Volatility</span>
-                            <span className="text-xs font-bold text-white uppercase">Stable/Med</span>
+                            <span className="text-[8px] text-zinc-500 uppercase font-black block mb-1 tracking-tighter">Connected</span>
+                            <span className="text-xs font-bold text-white uppercase">{(apiStatus.kraken ? 1 : 0) + (apiStatus.coinbase ? 1 : 0)} Exchanges</span>
                          </div>
                          <div className="bg-black/40 p-4 rounded-xl border border-white/5">
                             <span className="text-[8px] text-zinc-500 uppercase font-black block mb-1 tracking-tighter">Diversification</span>
-                            <span className="text-xs font-bold text-white uppercase">{activeBalances.length > 3 ? 'Optimal' : 'Basic'}</span>
+                            <span className="text-xs font-bold text-white uppercase">{allocationMatrix.length > 3 ? 'Optimal' : 'Basic'}</span>
                          </div>
                     </div>
                 </div>
@@ -284,7 +289,7 @@ const PortfolioView = ({ balances, scriptLoaded, equityCurve, onRefresh, tradeHi
                 { label: 'Profit Factor', val: stats.profitFactor, icon: Gauge, color: 'text-indigo-400' },
                 { label: 'Win Rate', val: stats.winRate.toFixed(1) + '%', icon: Target, color: 'text-emerald-400' },
                 { label: 'Executions', val: stats.totalTrades, icon: Zap, color: 'text-amber-400' },
-                { label: 'Assets', val: activeBalances.length, icon: Briefcase, color: 'text-blue-400' }
+                { label: 'Global Assets', val: allocationMatrix.length, icon: Briefcase, color: 'text-blue-400' }
             ].map((kpi, i) => (
                 <div key={i} className="bg-[#09090b] border border-white/5 rounded-[2rem] p-6 flex items-center justify-between shadow-xl">
                     <div>
@@ -299,30 +304,42 @@ const PortfolioView = ({ balances, scriptLoaded, equityCurve, onRefresh, tradeHi
         {/* ALLOCATION MATRIX & LOGS ROW */}
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
             <div className="bg-[#09090b] border border-white/5 rounded-[2.5rem] p-8 shadow-2xl">
-                <h3 className="text-xs font-black text-zinc-400 uppercase tracking-[0.3em] mb-8">Allocation Matrix</h3>
+                <h3 className="text-xs font-black text-zinc-400 uppercase tracking-[0.3em] mb-8">Global Allocation</h3>
                 <div className="space-y-4">
-                    {allocation.map((item) => (
-                        <div key={item.coin} className="flex items-center justify-between p-4 rounded-2xl bg-black/40 border border-white/5 hover:border-indigo-500/30 transition-all group">
+                    {allocationMatrix.map((item) => {
+                        const exchangeInfo = exchangeMap[item.exchange] || { text: 'text-zinc-500', bg: 'bg-zinc-800/10', dot: 'bg-zinc-800' };
+                        
+                        return (
+                        <div key={`${item.exchange}-${item.coin}`} className="flex items-center justify-between p-4 rounded-2xl bg-black/40 border border-white/5 hover:border-indigo-500/30 transition-all group">
                             <div className="flex items-center gap-4">
                                 <div className="w-10 h-10 rounded-xl bg-zinc-800 flex items-center justify-center text-[10px] font-black text-zinc-500 group-hover:bg-indigo-600 group-hover:text-white transition-all uppercase">
                                     {item.coin.substring(0, 3)}
                                 </div>
                                 <div>
-                                    <p className="text-sm font-black text-white">{item.coin}</p>
-                                    <p className="text-[10px] text-zinc-500 font-mono">{item.amount.toFixed(4)} Units</p>
+                                    <div className="flex items-center gap-2">
+                                        <p className="text-sm font-black text-white">{item.coin}</p>
+                                        <span className={`text-[8px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded flex items-center gap-1 ${exchangeInfo.bg} ${exchangeInfo.text} border border-white/5`}>
+                                            <div className={`w-1 h-1 rounded-full ${exchangeInfo.dot}`}></div>
+                                            {item.exchange}
+                                        </span>
+                                    </div>
+                                    <p className="text-[10px] text-zinc-500 font-mono mt-1">{item.amount.toFixed(4)} Units</p>
                                 </div>
                             </div>
                             <div className="text-right">
-                                <div className="text-xs font-black text-indigo-400 font-mono">{item.weight}%</div>
-                                <ChevronRight size={14} className="text-zinc-800 ml-auto mt-1 group-hover:text-zinc-500"/>
+                                <div className="text-sm font-black text-white font-mono">${item.usdValue.toFixed(2)}</div>
+                                <div className="text-xs font-black text-indigo-400 font-mono">{item.weight.toFixed(1)}%</div>
                             </div>
                         </div>
-                    ))}
+                    )})}
+                    {allocationMatrix.length === 0 && (
+                        <p className="text-center text-xs text-zinc-600 mt-10">No active balances found</p>
+                    )}
                 </div>
             </div>
 
             <div className="xl:col-span-2 bg-[#09090b] border border-white/5 rounded-[2.5rem] p-8 shadow-2xl overflow-hidden">
-                <h3 className="text-xs font-black text-zinc-400 uppercase tracking-[0.3em] mb-8">Order Intelligence Log</h3>
+                <h3 className="text-xs font-black text-zinc-400 uppercase tracking-[0.3em] mb-8">Aggregated Executions</h3>
                 <div className="overflow-x-auto">
                     <table className="w-full text-left border-separate border-spacing-y-3">
                         <thead>
@@ -335,7 +352,6 @@ const PortfolioView = ({ balances, scriptLoaded, equityCurve, onRefresh, tradeHi
                             </tr>
                         </thead>
                         <tbody className="text-[11px]">
-                            {/* 🔥 FIX: slice(0,6) pakt nu netjes de nieuwste trades! */}
                             {tradeHistory.slice(0, 10).map((t, i) => (
                                 <tr key={i} className="group">
                                     <td className="py-4 pl-4 bg-black/40 rounded-l-2xl border-y border-l border-white/5 text-zinc-500 font-mono">{t.date}</td>
@@ -352,11 +368,10 @@ const PortfolioView = ({ balances, scriptLoaded, equityCurve, onRefresh, tradeHi
                                 </tr>
                             ))}
                             
-                            {/* Fallback voor als er nog geen trades zijn */}
                             {tradeHistory.length === 0 && (
                                 <tr>
                                     <td colSpan="5" className="py-8 text-center text-[10px] text-zinc-600 italic uppercase tracking-widest border border-dashed border-white/5 rounded-xl">
-                                        No recent executions found
+                                        No executions found
                                     </td>
                                 </tr>
                             )}

@@ -3,6 +3,7 @@ const cors = require('cors');
 const axios = require('axios');
 const crypto = require('crypto');
 const qs = require('qs');
+const jwt = require('jsonwebtoken'); // Vergeet deze import niet bovenaan!
 
 const app = express();
 
@@ -34,29 +35,52 @@ const getMessageSignature = (path, request, secret, nonce) => {
 // ==========================================
 // 🔵 COINBASE ADVANCED TRADE API
 // ==========================================
+
 app.post('/api/coinbase/balance', async (req, res) => {
     try {
-        const cbKey = req.headers['x-cb-api-key']?.trim();
-        const cbSecret = req.headers['x-cb-api-secret']?.trim();
+        const cbKey = req.headers['x-cb-api-key']; // format: organizations/{org_id}/apiKeys/{key_id}
+        const rawSecret = req.headers['x-cb-api-secret'];
 
-        if (!cbKey || !cbSecret) return res.json([]);
+        if (!cbKey || !rawSecret) return res.json([]);
 
-        const timestamp = Math.floor(Date.now() / 1000).toString();
-        const method = 'GET';
-        const path = '/api/v3/brokerage/accounts';
-        const message = timestamp + method + path;
-        
-        const signature = crypto.createHmac('sha256', cbSecret)
-                                .update(message)
-                                .digest('hex');
+        // 1. Zorg dat we een perfect geformatteerde PEM-key hebben
+        const cleanSecret = rawSecret
+            .replace(/-----BEGIN EC PRIVATE KEY-----/gi, '')
+            .replace(/-----END EC PRIVATE KEY-----/gi, '')
+            .replace(/\\n/g, '') // Mocht de browser letterlijke \n tekens meesturen
+            .replace(/\s+/g, ''); 
 
-        const response = await axios.get(`https://api.coinbase.com${path}`, {
-            headers: {
-                'CB-ACCESS-KEY': cbKey,
-                'CB-ACCESS-SIGN': signature,
-                'CB-ACCESS-TIMESTAMP': timestamp,
-                'Content-Type': 'application/json'
+        const matched = cleanSecret.match(/.{1,64}/g);
+        if (!matched) throw new Error("Ongeldige Base64 data");
+        const formattedSecret = `-----BEGIN EC PRIVATE KEY-----\n${matched.join('\n')}\n-----END EC PRIVATE KEY-----\n`;
+
+        // 2. Exacte parameters uit de Coinbase CDP documentatie
+        const request_method = 'GET';
+        const url = 'api.coinbase.com';
+        const request_path = '/api/v3/brokerage/accounts';
+        const uri = `${request_method} ${url}${request_path}`;
+        const timestamp = Math.floor(Date.now() / 1000);
+
+        // 3. De nieuwe CDP Payload
+        const payload = {
+            iss: 'cdp', // Aangepast naar de documentatie
+            nbf: timestamp,
+            exp: timestamp + 120,
+            sub: cbKey,
+            uri: uri,   // Dit veld is nu verplicht!
+        };
+
+        const token = jwt.sign(payload, formattedSecret, {
+            algorithm: 'ES256',
+            header: {
+                kid: cbKey,
+                nonce: crypto.randomBytes(16).toString('hex')
             }
+        });
+
+        // 4. De daadwerkelijke API Call
+        const response = await axios.get(`https://${url}${request_path}`, {
+            headers: { 'Authorization': `Bearer ${token}` }
         });
 
         if (response.data && response.data.accounts) {
@@ -71,14 +95,10 @@ app.post('/api/coinbase/balance', async (req, res) => {
         } else {
             res.json([]);
         }
+
     } catch (err) {
-        // KIJK HIER: Dit print de ECHTE reden in je Node.js zwarte scherm (terminal)
-        if (err.response) {
-            console.error("🔥 Coinbase API Reject:", JSON.stringify(err.response.data));
-        } else {
-            console.error("🔥 Network Error:", err.message);
-        }
-        res.json([]); // Voorkom dat de frontend crasht
+        console.error("🔥 Coinbase CDP Error:", err.response ? JSON.stringify(err.response.data) : err.message);
+        res.json([]);
     }
 });
 

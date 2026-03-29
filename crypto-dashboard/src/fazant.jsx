@@ -59,7 +59,7 @@ export default function TradingDashboard() {
   });
 
   const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [balances, setBalances] = useState({ USD: 0, BTC: 0, ETH: 0, SOL: 0 });
+  const [balances, setBalances] = useState([]);
   const [tradeSide, setTradeSide] = useState('Buy'); 
   const [orderType, setOrderType] = useState('Limit');
   const [activeTab, setActiveTab] = useState('positions');
@@ -470,91 +470,95 @@ if (logMsg !== updatedBot.lastLog) {
   // ==========================================
   // 💰 FETCH BALANCES & EQUITY
   // ==========================================
-  const fetchBalances = async () => {
+// fazant.jsx - Regel 493
+const fetchBalances = async () => {
+    let prices = {};
+    if (apiKeys.geminiKey) {
+        try {
+            const gemRes = await fetch('http://localhost:3001/api/gemini/pairs', { method: 'POST', headers: getApiHeaders() });
+            const gemData = await gemRes.json();
+            if (!gemData.error) prices = gemData.prices;
+        } catch (e) { console.error("Could not fetch Gemini prices", e); }
+    }
+
+    let rawBalancesArray = []; 
+    const now = Math.floor(Date.now() / 1000);
+    let totalUsdValueForChart = 0;
+
+    const getUsdValue = (coin, amount) => {
+        if (coin === 'USD' || coin === 'ZUSD') return amount;
+        const cleanCoin = coin.replace('XXBT', 'BTC').replace('ZUSD', 'USD').replace('XETH', 'ETH');
+        const priceKey = `${cleanCoin}/USD`.toUpperCase();
+        if (prices[priceKey]) return amount * prices[priceKey];
+        return 0; 
+    };
+
+    // --- 1. KRAKEN FETCH (Nu ALTIJD uitgevoerd, ook als key in backend zit) ---
     try {
-      let combinedBalances = {};
-
-      // --- 1. KRAKEN FETCH ---
-      const resK = await fetch('http://localhost:3001/api/balance', { 
-        method: 'POST', 
-        headers: getApiHeaders() 
-      });
-      const dataK = await resK.json();
-      
-      if (!dataK.error) {
-        Object.keys(dataK).forEach(k => { 
-          let cleanKey = k.replace('Z', '').replace('X', ''); 
-          if (k === 'ZUSD') cleanKey = 'USD'; 
-          if (k === 'XXBT') cleanKey = 'BTC'; 
-          combinedBalances[cleanKey] = (combinedBalances[cleanKey] || 0) + parseFloat(dataK[k]); 
+        const resK = await fetch('http://localhost:3001/api/balance', { 
+            method: 'POST', 
+            headers: getApiHeaders() 
         });
-      }
-
-      // --- 2. COINBASE FETCH ---
-      try {
-        const cbData = await fetchCoinbaseBalances();
-        if (Array.isArray(cbData)) {
-          cbData.forEach(acc => {
-            const key = acc.currency === 'XBT' ? 'BTC' : acc.currency;
-            combinedBalances[key] = (combinedBalances[key] || 0) + acc.amount;
-          });
+        const dataK = await resK.json();
+        
+        // Let op: jouw backend stuurt de data direct terug (niet genest in result)
+        if (!dataK.error && typeof dataK === 'object') {
+            Object.keys(dataK).forEach(k => { 
+                const amount = parseFloat(dataK[k]);
+                if (amount > 0.00000001) { 
+                    let cleanKey = k.replace('Z', '').replace('X', ''); 
+                    if (k === 'ZUSD') cleanKey = 'USD'; 
+                    if (k === 'XXBT') cleanKey = 'BTC'; 
+                    
+                    rawBalancesArray.push({ currency: cleanKey, amount: amount, exchange: 'Kraken' });
+                    totalUsdValueForChart += getUsdValue(cleanKey, amount);
+                }
+            });
         }
-      } catch (e) { 
-        // VOEG DEZE LOG TOE:
-        console.error("DEBUG COINBASE ERROR:", e); 
-        console.warn("Coinbase balance could not be loaded, skipping..."); 
-      }
+    } catch (e) { console.error("Kraken balance fail", e); }
 
-      // --- 3. STATE UPDATE ---
-      setBalances(combinedBalances);
-      setIsLoggedIn(true);
+    // --- 2. COINBASE FETCH ---
+    if (apiKeys.cbKey) {
+        try {
+            const cbData = await fetchCoinbaseBalances(); 
+            if (Array.isArray(cbData)) {
+                cbData.forEach(acc => {
+                    const amount = acc.amount;
+                    if (amount > 0.00000001) {
+                        const key = acc.currency === 'XBT' ? 'BTC' : acc.currency;
+                        rawBalancesArray.push({ currency: key, amount: amount, exchange: 'Coinbase' });
+                        totalUsdValueForChart += getUsdValue(key, amount);
+                    }
+                });
+            }
+        } catch (e) { console.error("Coinbase balance fail", e); }
+    }
 
-      let estTotal = cleanBalances['USD'] || 0;
-      const heldCryptos = Object.keys(cleanBalances).filter(k => k !== 'USD' && cleanBalances[k] > 0.00001);
-      
-      if (heldCryptos.length > 0) {
-          const pairQuery = heldCryptos.map(c => {
-              if (c === 'BTC') return 'XXBTZUSD';
-              if (c === 'ETH') return 'XETHZUSD';
-              return `${c}USD`;
-          }).join(',');
+    // --- 3. STATE UPDATE ---
+    setBalances(rawBalancesArray);
 
-          try {
-              const tickRes = await fetch('http://localhost:3001/api/ticker', { 
-                  method: 'POST', headers: getApiHeaders(), body: JSON.stringify({ pair: pairQuery }) 
-              });
-              const tickData = await tickRes.json();
-              if (tickData.result) {
-                  heldCryptos.forEach(c => {
-                      let krakKey = c === 'BTC' ? 'XXBTZUSD' : c === 'ETH' ? 'XETHZUSD' : `${c}USD`;
-                      let pairInfo = tickData.result[krakKey] || tickData.result[`X${c}ZUSD`] || tickData.result[`${c}ZUSD`];
-                      if (pairInfo && pairInfo.c) {
-                          estTotal += cleanBalances[c] * parseFloat(pairInfo.c[0]); 
-                      }
-                  });
-              }
-          } catch (e) { console.error("Error fetching live prices", e); }
-      }
+    if (rawBalancesArray.length > 0) {
+        setIsLoggedIn(true);
+    } else {
+        setIsLoggedIn(false);
+    }
 
-      const now = Math.floor(Date.now() / 1000);
-      setEquityCurve(prev => {
-          if (prev.length === 0) { 
-              const newCurve = [{ time: now, value: estTotal }]; 
-              localStorage.setItem('kraken_equity_curve', JSON.stringify(newCurve)); 
-              return newCurve; 
-          }
-          const last = prev[prev.length - 1];
-          if (now - last.time > 60 || Math.abs(last.value - estTotal) > 0.5) { 
-              const newCurve = [...prev, { time: now, value: estTotal }]; 
-              const trimmedCurve = newCurve.slice(-500); 
-              localStorage.setItem('kraken_equity_curve', JSON.stringify(trimmedCurve)); 
-              return trimmedCurve; 
-          }
-          return prev;
-      });
+    // --- 4. GRAFIEK UPDATE ---
+    setEquityCurve(currentCurve => {
+        // Gebruik fallback naar localStorage als currentCurve leeg is
+        const prevCurve = currentCurve.length > 0 ? currentCurve : (JSON.parse(localStorage.getItem('kraken_equity_curve')) || []);
+        const lastValue = prevCurve[prevCurve.length - 1]?.value || 0;
+        
+        if (Math.abs(totalUsdValueForChart - lastValue) > 0.1 || prevCurve.length === 0) {
+            const newCurve = [...prevCurve, { time: now, value: totalUsdValueForChart }];
+            const trimmedCurve = newCurve.slice(-500); // Houd de laatste 500 datapunten
+            localStorage.setItem('kraken_equity_curve', JSON.stringify(trimmedCurve));
+            return trimmedCurve;
+        }
+        return prevCurve;
+    });
 
-      setTimeout(() => fetchOrders(), 1000); 
-    } catch (err) { setIsLoggedIn(false); }
+    setTimeout(() => fetchOrders(), 1000); 
   };
 
   const hasFetchedBalance = useRef(false);
@@ -601,7 +605,20 @@ if (logMsg !== updatedBot.lastLog) {
       if (orderType === 'Market') { setPriceInput(currentPrice.toString()); if (amountInput) setTotalInput((parseFloat(amountInput) * currentPrice).toFixed(2)); } 
       if (currentPrice > 0 && !priceInput) { setPriceInput(currentPrice.toFixed(4)); }
   }, [orderType, currentPrice]);
-  const handleSliderClick = (pct) => { const available = balances[activePair.quote] || 0; const spend = available * (pct / 100); const p = orderType === 'Market' ? currentPrice : parseFloat(priceInput) || currentPrice; setTotalInput(spend.toFixed(2)); if (p > 0) setAmountInput((spend / p).toFixed(6)); };
+  const handleSliderClick = (pct) => { 
+      // Haal de juiste balans op afhankelijk van of we kopen (Quote) of verkopen (Base)
+      const available = tradeSide === 'Buy' ? getBalance(activePair.quote) : getBalance(activePair.base); 
+      const spend = available * (pct / 100); 
+      const p = orderType === 'Market' ? currentPrice : parseFloat(priceInput) || currentPrice; 
+      
+      if (tradeSide === 'Buy') {
+          setTotalInput(spend.toFixed(2)); 
+          if (p > 0) setAmountInput((spend / p).toFixed(6)); 
+      } else {
+          setAmountInput(spend.toFixed(6));
+          if (p > 0) setTotalInput((spend * p).toFixed(2));
+      }
+  };
 
   const executeOrder = async (side) => {
     const amt = parseFloat(amountInput); const p = orderType === 'Market' ? currentPrice : parseFloat(priceInput);
@@ -685,6 +702,22 @@ if (logMsg !== updatedBot.lastLog) {
     ));
   };
 
+  // Helper om de multi-exchange balans netjes op te tellen
+  const getBalance = (currency) => {
+      if (!Array.isArray(balances)) return 0;
+      let searchCurrency = currency.replace('XBT', 'BTC').replace('ZUSD', 'USD').replace('ZEUR', 'EUR');
+      return balances
+          .filter(b => b.currency === searchCurrency)
+          .reduce((sum, b) => sum + b.amount, 0); // Telt Kraken en Coinbase bij elkaar op!
+  };
+
+  // Helper voor het juiste valuta-symbool (€ of $)
+  const getCurrencySymbol = (quote) => {
+      if (quote.includes('EUR')) return '€';
+      if (quote.includes('USD')) return '$';
+      return ''; // Laat leeg voor crypto/crypto pairs (bijv. ETH/BTC)
+  };
+
   return (
     <div className="flex h-screen bg-[#09090b] text-zinc-300 font-sans text-sm overflow-hidden">
       {/* ⚙️ API Settings Modal */}
@@ -714,7 +747,7 @@ if (logMsg !== updatedBot.lastLog) {
                 </div>
                 <div className="space-y-1">
                   <label className="text-[10px] uppercase text-zinc-500 font-bold">Coinbase API Secret</label>
-                  <input type="password" value={apiKeys.cbSecret} onChange={e => setApiKeys({...apiKeys, cbSecret: e.target.value})} className="w-full bg-[#050505] border border-zinc-800 rounded p-2 text-sm text-white outline-none focus:border-blue-500" placeholder="Coinbase Secret" />
+                  <textarea value={apiKeys.cbSecret} onChange={e => setApiKeys({...apiKeys, cbSecret: e.target.value})} className="w-full bg-[#050505] border border-zinc-800 rounded p-2 text-sm text-white outline-none focus:border-blue-500 h-24 font-mono text-[8px]" placeholder="Plak hier de VOLLEDIGE Private Key (inclusief BEGIN/END regels)"></textarea>
                 </div>
 
                 <div className="h-px bg-zinc-800/50 my-2"></div>
@@ -786,11 +819,20 @@ if (logMsg !== updatedBot.lastLog) {
             )}
           </div>
           <div className="h-8 w-px bg-zinc-800 mx-4"></div>
-          <div className="flex items-center space-x-6 text-[11px] font-mono">
-            <div className="flex flex-col"><span className="text-emerald-500 font-bold text-sm">${formatPrice(currentPrice)}</span><span className="text-zinc-500 uppercase tracking-tighter">Live Price</span></div>
-            <div className="flex flex-col"><span className="text-zinc-200 font-bold">${(balances[activePair.quote] || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</span><span className="text-zinc-500 uppercase tracking-tighter">{activePair.quote} Balance</span></div>
-            <div className="flex flex-col"><span className="text-zinc-200 font-bold">{(balances[activePair.base] || 0).toFixed(4)}</span><span className="text-zinc-500 uppercase tracking-tighter">{activePair.base.replace('XBT', 'BTC')} Balance</span></div>
-          </div>
+            <div className="flex items-center space-x-6 text-[11px] font-mono">
+              <div className="flex flex-col">
+                <span className="text-emerald-500 font-bold text-sm">{getCurrencySymbol(activePair.quote)}{formatPrice(currentPrice)}</span>
+                <span className="text-zinc-500 uppercase tracking-tighter">Live Price</span>
+              </div>
+              <div className="flex flex-col">
+                <span className="text-zinc-200 font-bold">{getCurrencySymbol(activePair.quote)}{getBalance(activePair.quote).toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                <span className="text-zinc-500 uppercase tracking-tighter">{activePair.quote} Balance</span>
+              </div>
+              <div className="flex flex-col">
+                <span className="text-zinc-200 font-bold">{getBalance(activePair.base).toFixed(4)}</span>
+                <span className="text-zinc-500 uppercase tracking-tighter">{activePair.base.replace('XBT', 'BTC')} Balance</span>
+              </div>
+            </div>
           <div className="flex-1"></div>
           <div className="flex items-center pl-6 border-l border-zinc-800 ml-4">
             {isLoggedIn ? (
@@ -923,7 +965,7 @@ if (logMsg !== updatedBot.lastLog) {
                     <div className="flex bg-[#09090b] p-1 rounded-lg border border-zinc-800"><button onClick={() => setTradeSide('Buy')} className={`flex-1 py-1.5 text-xs font-bold rounded transition ${tradeSide === 'Buy' ? 'bg-emerald-600/20 text-emerald-500' : 'text-zinc-500'}`}>BUY</button><button onClick={() => setTradeSide('Sell')} className={`flex-1 py-1.5 text-xs font-bold rounded transition ${tradeSide === 'Sell' ? 'bg-rose-600/20 text-rose-500' : 'text-zinc-500'}`}>SELL</button></div>
                     <div className="flex bg-[#09090b] p-1 rounded-lg border border-zinc-800">{['Limit', 'Market'].map(type => (<button key={type} onClick={() => setOrderType(type)} className={`flex-1 py-1 text-[10px] font-bold rounded uppercase transition ${orderType === type ? 'bg-zinc-800 text-white shadow-sm' : 'text-zinc-500'}`}>{type}</button>))}</div>
                     <div className="space-y-4 pt-2">
-                      <div className="flex justify-between text-[10px] uppercase font-bold text-zinc-500"><span>Balance</span><span className="text-zinc-200">{tradeSide === 'Buy' ? (balances[activePair.quote] || 0).toLocaleString('en-US', {minimumFractionDigits: 2}) : (balances[activePair.base] || 0).toFixed(6)} {tradeSide === 'Buy' ? activePair.quote : activePair.base.replace('XBT', 'BTC')}</span></div>
+                      <div className="flex justify-between text-[10px] uppercase font-bold text-zinc-500"><span>Balance</span><span className="text-zinc-200">{tradeSide === 'Buy' ? getBalance(activePair.quote).toLocaleString('en-US', {minimumFractionDigits: 2}) : getBalance(activePair.base).toFixed(6)} {tradeSide === 'Buy' ? activePair.quote : activePair.base.replace('XBT', 'BTC')}</span></div>
                       <div className="bg-[#09090b] border border-zinc-800 rounded-lg p-2 focus-within:border-blue-500"><div className="flex justify-between text-[10px] text-zinc-500 uppercase mb-1"><span>Price</span><span>{activePair.quote}</span></div><input type="number" disabled={orderType === 'Market'} value={orderType === 'Market' ? '' : priceInput} onChange={(e) => onPriceChange(e.target.value)} placeholder={orderType === 'Market' ? 'MARKET' : '0.00'} className="w-full bg-transparent text-zinc-100 font-mono outline-none text-sm" /></div>
                       <div className="bg-[#09090b] border border-zinc-800 rounded-lg p-2 focus-within:border-blue-500"><div className="flex justify-between text-[10px] text-zinc-500 uppercase mb-1"><span>Amount</span><span>{activePair.base.replace('XBT', 'BTC')}</span></div><input type="number" value={amountInput} onChange={(e) => onAmountChange(e.target.value)} placeholder="0.00" className="w-full bg-transparent text-zinc-100 font-mono outline-none text-sm" /></div>
                       <div className="flex justify-between gap-1">{[25, 50, 75, 100].map(pct => (<button key={pct} onClick={() => handleSliderClick(pct)} className="flex-1 py-1 bg-zinc-800 hover:bg-zinc-700 text-[9px] rounded font-bold">{pct}%</button>))}</div>

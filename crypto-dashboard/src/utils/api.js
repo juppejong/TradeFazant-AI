@@ -2,17 +2,24 @@
 
 export const tfMap = { '1m': 1, '5m': 5, '15m': 15, '1H': 60, '4H': 240, '1D': 1440 };
 
+// 🛠️ FIX: Voeg cbKey en cbSecret toe aan de headers helper
 export const getApiHeaders = () => {
-  let keys = { krakenKey: '', krakenSecret: '', geminiKey: '' };
+  let keys = { krakenKey: '', krakenSecret: '', geminiKey: '', cbKey: '', cbSecret: '' };
   try {
     const stored = localStorage.getItem('trading_api_keys');
-    if (stored) keys = JSON.parse(stored);
-  } catch (e) {}
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      keys = { ...keys, ...parsed };
+    }
+  } catch (e) { console.error(e); }
+
   return {
     'Content-Type': 'application/json',
     'x-kraken-api-key': keys.krakenKey || '',
     'x-kraken-api-secret': keys.krakenSecret || '',
-    'x-gemini-api-key': keys.geminiKey || ''
+    'x-cb-api-key': (keys.cbKey || '').trim(),
+    // STUUR DE SECRET RUW DOOR: De server repareert de formatering.
+    'x-cb-api-secret': keys.cbSecret || '' 
   };
 };
 
@@ -51,29 +58,25 @@ export const fetchKrakenOHLC = async (interval, pairAltname) => {
   } catch (error) { return []; }
 };
 
-// src/utils/api.js
+// 🚀 Coinbase Balance Fetcher
 export const fetchCoinbaseBalances = async () => {
-  let keys = { cbKey: '', cbSecret: '' };
   try {
-    const stored = localStorage.getItem('trading_api_keys');
-    if (stored) keys = JSON.parse(stored);
-  } catch (e) {
-    console.error("LocalStorage error", e);
-  }
+    // We gebruiken getApiHeaders() om consistentie te waarborgen
+    const headers = getApiHeaders();
+    
+    const res = await fetch('http://localhost:3001/api/coinbase/balance', {
+      method: 'POST',
+      headers: headers
+    });
 
-  // De fetch MOET naar je lokale server gaan, niet direct naar Coinbase!
-  const res = await fetch('http://localhost:3001/api/coinbase/balance', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-cb-api-key': (keys.cbKey || '').trim(),
-      'x-cb-api-secret': (keys.cbSecret || '').trim()
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || `Server responded with ${res.status}`);
     }
-  });
 
-  if (!res.ok) {
-    throw new Error(`Server responded with ${res.status}`);
+    return await res.json();
+  } catch (error) {
+    console.error("fetchCoinbaseBalances error:", error);
+    throw error; // Laat de fazant.jsx catch dit afhandelen
   }
-
-  return await res.json();
 };
