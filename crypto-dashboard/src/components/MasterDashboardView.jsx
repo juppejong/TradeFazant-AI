@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { 
   LayoutDashboard, Activity, Waves, Wallet, 
   ArrowUpRight, ArrowDownRight, Sparkles, Bot, 
@@ -6,31 +6,114 @@ import {
 } from 'lucide-react';
 
 const MasterDashboardView = ({ 
-  balances = {}, 
+  balances = [], 
   bots = [], 
   whaleTrades = [], 
   currentPrice = 0, 
-  activePair = { display: 'BTC/USD' }, 
-  equityCurve = [] 
+  activePair = { display: 'BTC/USD' }
 }) => {
-  
-  // 📊 Berekening van algemene stats
-  const totalValue = useMemo(() => {
-    return equityCurve.length > 0 ? equityCurve[equityCurve.length - 1].value : 0;
-  }, [equityCurve]);
 
-  // Bereken 24h verschil (gesimuleerd op basis van eerste vs laatste punt in curve)
+  // 1. 🔑 API CHECKS VOOR MULTI-EXCHANGE UI
+  const apiStatus = useMemo(() => {
+    try {
+      const keys = JSON.parse(localStorage.getItem('trading_api_keys') || '{}');
+      return {
+        gemini: !!keys.geminiKey,
+        kraken: !!keys.krakenKey,
+        coinbase: !!keys.cbKey
+      };
+    } catch (e) { 
+      return { gemini: false, kraken: false, coinbase: false }; 
+    }
+  }, []);
+
+  // 2. 🛠️ DATA NORMALISATIE
+  const balancesArray = useMemo(() => {
+    if (Array.isArray(balances)) return balances;
+    return Object.entries(balances || {}).map(([coin, amount]) => {
+      let cleanCoin = coin.replace('XXBT', 'BTC').replace('ZUSD', 'USD').replace('XETH', 'ETH');
+      return { currency: cleanCoin, amount: parseFloat(amount), exchange: 'Kraken' };
+    });
+  }, [balances]);
+
+  // 3. 🚀 LIVE PRIJZEN OPHALEN
+  const [livePrices, setLivePrices] = useState({});
+  useEffect(() => {
+    const fetchPrices = async () => {
+      const cryptos = [...new Set(balancesArray.filter(b => b.currency !== 'USD').map(b => b.currency))];
+      if (cryptos.length === 0) return;
+      const pairs = cryptos.map(c => `${c === 'BTC' ? 'XBT' : c}USD`).join(',');
+      try {
+        const res = await fetch(`https://api.kraken.com/0/public/Ticker?pair=${pairs}`);
+        const data = await res.json();
+        if (!data.error || data.error.length === 0) {
+          const newPrices = {};
+          Object.keys(data.result).forEach(key => {
+            cryptos.forEach(coin => {
+              const searchCoin = coin === 'BTC' ? 'XBT' : coin;
+              if (key.includes(searchCoin)) newPrices[coin] = parseFloat(data.result[key].c[0]);
+            });
+          });
+          setLivePrices(newPrices);
+        }
+      } catch (err) { console.error("Kon live prijzen niet ophalen:", err); }
+    };
+    fetchPrices();
+    const interval = setInterval(fetchPrices, 15000);
+    return () => clearInterval(interval);
+  }, [balancesArray]);
+
+  // 4. 🧩 BEREKEN ACTUELE TOTALE WAARDE
+  const currentTotalUsdValue = useMemo(() => {
+      if (balancesArray.length === 0) return 0;
+      let totalUsd = 0;
+      balancesArray.forEach(b => {
+          let usdValue = b.currency === 'USD' ? b.amount : b.amount * (livePrices[b.currency] || 0);
+          if (usdValue > 0.1) totalUsd += usdValue;
+      });
+      return totalUsd;
+  }, [balancesArray, livePrices]);
+
+  // 5. 📈 LOKALE GRAFIEK BEHEERDER (Voor correcte 24H meting)
+  const [chartHistory, setChartHistory] = useState(() => {
+      try { return JSON.parse(localStorage.getItem('portfolio_history_v2')) || []; }
+      catch { return []; }
+  });
+
+  useEffect(() => {
+      if (currentTotalUsdValue > 1) {
+          setChartHistory(prev => {
+              const now = Math.floor(Date.now() / 1000);
+              const last = prev[prev.length - 1];
+              if (!last || Math.abs(last.value - currentTotalUsdValue) > 1 || now - last.time > 60) {
+                  const newCurve = [...prev, { time: now, value: currentTotalUsdValue }];
+                  const trimmed = newCurve.slice(-500);
+                  localStorage.setItem('portfolio_history_v2', JSON.stringify(trimmed));
+                  return trimmed;
+              }
+              return prev;
+          });
+      }
+  }, [currentTotalUsdValue]);
+
+  // 6. 📊 24H BEREKENING
   const pnl24h = useMemo(() => {
-    if (equityCurve.length < 2) return { value: 0, pct: 0, isPositive: true };
-    const start = equityCurve[0].value;
-    const end = equityCurve[equityCurve.length - 1].value;
+    if (chartHistory.length < 2) return { value: 0, pct: 0, isPositive: true };
+
+    const now = Math.floor(Date.now() / 1000);
+    const cutoff = now - 86400; // 24H geleden
+
+    const validHistory = chartHistory.filter(p => p.time >= cutoff);
+    const start = validHistory.length > 0 ? validHistory[0].value : chartHistory[0].value;
+    const end = currentTotalUsdValue || chartHistory[chartHistory.length - 1].value;
+
     const diff = end - start;
     return {
       value: diff,
       pct: start > 0 ? (diff / start) * 100 : 0,
       isPositive: diff >= 0
     };
-  }, [equityCurve]);
+  }, [chartHistory, currentTotalUsdValue]);
 
   const activeBotsCount = useMemo(() => bots.filter(b => b.isRunning).length, [bots]);
 
@@ -41,7 +124,7 @@ const MasterDashboardView = ({
       <div className="absolute top-0 left-1/4 w-[500px] h-[500px] bg-indigo-600/10 rounded-full blur-[120px] pointer-events-none"></div>
       <div className="absolute bottom-0 right-1/4 w-[500px] h-[500px] bg-blue-600/5 rounded-full blur-[120px] pointer-events-none"></div>
 
-      {/* 🚀 Hero Sectie */}
+      {/* 🚀 Hero Sectie met Multi-Exchange Badges */}
       <div className="h-20 border-b border-white/5 bg-[#09090b]/80 backdrop-blur-2xl sticky top-0 z-[60] flex justify-between items-center px-8 shrink-0">
         <div className="flex items-center gap-4">
           <div className="p-3 bg-gradient-to-br from-indigo-500/20 to-purple-500/20 rounded-xl border border-indigo-500/30 shadow-[0_0_20px_rgba(99,102,241,0.15)] relative overflow-hidden">
@@ -52,9 +135,13 @@ const MasterDashboardView = ({
             <h2 className="text-xl font-black text-white tracking-tight uppercase flex items-center gap-2">
               Global Command Center
             </h2>
-            <div className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest flex items-center gap-2">
-              <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.8)]"></div> 
-              Kraken Engine: Connected
+            <div className="flex items-center gap-3 mt-1">
+                 <span className={`text-[9px] font-bold uppercase tracking-widest flex items-center gap-1 ${apiStatus.kraken ? 'text-purple-400' : 'text-zinc-700'}`}>
+                   <div className={`w-1.5 h-1.5 rounded-full ${apiStatus.kraken ? 'bg-purple-500 animate-pulse shadow-[0_0_8px_rgba(168,85,247,0.8)]' : 'bg-zinc-800'}`}></div> Kraken
+                 </span>
+                 <span className={`text-[9px] font-bold uppercase tracking-widest flex items-center gap-1 ${apiStatus.coinbase ? 'text-blue-400' : 'text-zinc-700'}`}>
+                   <div className={`w-1.5 h-1.5 rounded-full ${apiStatus.coinbase ? 'bg-blue-500 animate-pulse shadow-[0_0_8px_rgba(59,130,246,0.8)]' : 'bg-zinc-800'}`}></div> Coinbase
+                 </span>
             </div>
           </div>
         </div>
@@ -83,7 +170,7 @@ const MasterDashboardView = ({
             <div className="bg-gradient-to-br from-[#0b0e11] to-[#09090b] border border-white/5 rounded-3xl p-6 shadow-2xl relative overflow-hidden group">
                 <div className="absolute top-0 right-0 p-6 opacity-20 group-hover:opacity-40 transition-opacity"><Wallet size={40} className="text-indigo-400"/></div>
                 <span className="text-[10px] font-black text-zinc-500 uppercase mb-3 block tracking-widest relative z-10">Net Liquidity Value</span>
-                <span className="text-3xl font-mono font-black text-white tracking-tighter relative z-10">${totalValue.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                <span className="text-3xl font-mono font-black text-white tracking-tighter relative z-10">${currentTotalUsdValue.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                 <div className={`flex items-center gap-1.5 mt-3 text-[11px] font-black uppercase tracking-wider w-fit px-2.5 py-1 rounded-lg relative z-10 ${pnl24h.isPositive ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`}>
                     {pnl24h.isPositive ? <TrendingUp size={14}/> : <TrendingDown size={14}/>}
                     {pnl24h.isPositive ? '+' : ''}{pnl24h.pct.toFixed(2)}% <span className="opacity-50 ml-1 font-sans">24H</span>
@@ -113,18 +200,18 @@ const MasterDashboardView = ({
 
             <div className="bg-gradient-to-br from-[#0b0e11] to-[#09090b] border border-white/5 rounded-3xl p-6 shadow-2xl flex flex-col justify-between">
                 <div>
-                  <span className="text-[10px] font-black text-zinc-500 uppercase mb-1 block tracking-widest">System Architecture</span>
+                  <span className="text-[10px] font-black text-zinc-500 uppercase mb-1 block tracking-widest">Active Data Nodes</span>
                   <div className="flex items-end gap-3">
-                      <span className="text-3xl font-mono font-black text-emerald-400 tracking-tighter">0.92</span>
-                      <span className="text-sm font-bold text-zinc-500 mb-1">Sharpe</span>
+                      <span className="text-3xl font-mono font-black text-emerald-400 tracking-tighter">
+                          {(apiStatus.kraken ? 1 : 0) + (apiStatus.coinbase ? 1 : 0) + (apiStatus.gemini ? 1 : 0)}
+                      </span>
+                      <span className="text-sm font-bold text-zinc-500 mb-1">/ 3</span>
                   </div>
                 </div>
                 <div className="flex gap-2 mt-4">
-                    {['Data', 'Exec', 'Risk', 'AI'].map((node, i) => (
-                        <div key={i} className="flex-1 bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-[9px] font-black uppercase text-center py-1 rounded-md">
-                            {node}
-                        </div>
-                    ))}
+                    <div className={`flex-1 text-[9px] font-black uppercase text-center py-1 rounded-md border ${apiStatus.kraken ? 'bg-purple-500/10 border-purple-500/20 text-purple-400' : 'bg-zinc-900 border-white/5 text-zinc-600'}`}>KRAKEN</div>
+                    <div className={`flex-1 text-[9px] font-black uppercase text-center py-1 rounded-md border ${apiStatus.coinbase ? 'bg-blue-500/10 border-blue-500/20 text-blue-400' : 'bg-zinc-900 border-white/5 text-zinc-600'}`}>COINBASE</div>
+                    <div className={`flex-1 text-[9px] font-black uppercase text-center py-1 rounded-md border ${apiStatus.gemini ? 'bg-indigo-500/10 border-indigo-500/20 text-indigo-400' : 'bg-zinc-900 border-white/5 text-zinc-600'}`}>GEMINI AI</div>
                 </div>
             </div>
         </div>
@@ -184,7 +271,6 @@ const MasterDashboardView = ({
                                         </span>
                                     </td>
                                     <td className="py-3 px-4 rounded-r-xl border-y border-r border-white/5 text-right w-32">
-                                        {/* Mock Progress bar for visual density */}
                                         <div className="w-full h-1.5 bg-black rounded-full overflow-hidden border border-white/5 flex justify-end">
                                             <div className={`h-full ${bot.state?.livePnlPct >= 0 ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.5)]'}`} style={{ width: `${Math.min(100, Math.abs((bot.state?.livePnlPct || 0) * 10) + 20)}%` }}></div>
                                         </div>
@@ -280,7 +366,6 @@ const MasterDashboardView = ({
                             <span className="text-xs font-mono font-bold text-indigo-400">88%</span>
                         </div>
                         <div className="w-full bg-black/50 h-2 rounded-full overflow-hidden border border-white/5 relative">
-                            {/* Marker lines inside the bar */}
                             <div className="absolute inset-0 flex justify-between px-[25%] opacity-20"><div className="w-px h-full bg-white"></div><div className="w-px h-full bg-white"></div><div className="w-px h-full bg-white"></div></div>
                             <div className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 shadow-[0_0_10px_rgba(139,92,246,0.6)]" style={{ width: '88%' }}></div>
                         </div>

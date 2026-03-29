@@ -472,36 +472,14 @@ if (logMsg !== updatedBot.lastLog) {
   // ==========================================
 // fazant.jsx - Regel 493
 const fetchBalances = async () => {
-    let prices = {};
-    if (apiKeys.geminiKey) {
-        try {
-            const gemRes = await fetch('http://localhost:3001/api/gemini/pairs', { method: 'POST', headers: getApiHeaders() });
-            const gemData = await gemRes.json();
-            if (!gemData.error) prices = gemData.prices;
-        } catch (e) { console.error("Could not fetch Gemini prices", e); }
-    }
-
     let rawBalancesArray = []; 
     const now = Math.floor(Date.now() / 1000);
-    let totalUsdValueForChart = 0;
 
-    const getUsdValue = (coin, amount) => {
-        if (coin === 'USD' || coin === 'ZUSD') return amount;
-        const cleanCoin = coin.replace('XXBT', 'BTC').replace('ZUSD', 'USD').replace('XETH', 'ETH');
-        const priceKey = `${cleanCoin}/USD`.toUpperCase();
-        if (prices[priceKey]) return amount * prices[priceKey];
-        return 0; 
-    };
-
-    // --- 1. KRAKEN FETCH (Nu ALTIJD uitgevoerd, ook als key in backend zit) ---
+    // --- 1. KRAKEN FETCH ---
     try {
-        const resK = await fetch('http://localhost:3001/api/balance', { 
-            method: 'POST', 
-            headers: getApiHeaders() 
-        });
+        const resK = await fetch('http://localhost:3001/api/balance', { method: 'POST', headers: getApiHeaders() });
         const dataK = await resK.json();
         
-        // Let op: jouw backend stuurt de data direct terug (niet genest in result)
         if (!dataK.error && typeof dataK === 'object') {
             Object.keys(dataK).forEach(k => { 
                 const amount = parseFloat(dataK[k]);
@@ -509,9 +487,7 @@ const fetchBalances = async () => {
                     let cleanKey = k.replace('Z', '').replace('X', ''); 
                     if (k === 'ZUSD') cleanKey = 'USD'; 
                     if (k === 'XXBT') cleanKey = 'BTC'; 
-                    
                     rawBalancesArray.push({ currency: cleanKey, amount: amount, exchange: 'Kraken' });
-                    totalUsdValueForChart += getUsdValue(cleanKey, amount);
                 }
             });
         }
@@ -527,36 +503,57 @@ const fetchBalances = async () => {
                     if (amount > 0.00000001) {
                         const key = acc.currency === 'XBT' ? 'BTC' : acc.currency;
                         rawBalancesArray.push({ currency: key, amount: amount, exchange: 'Coinbase' });
-                        totalUsdValueForChart += getUsdValue(key, amount);
                     }
                 });
             }
         } catch (e) { console.error("Coinbase balance fail", e); }
     }
 
-    // --- 3. STATE UPDATE ---
     setBalances(rawBalancesArray);
+    setIsLoggedIn(rawBalancesArray.length > 0);
 
-    if (rawBalancesArray.length > 0) {
-        setIsLoggedIn(true);
-    } else {
-        setIsLoggedIn(false);
-    }
+    // --- 3. BEREKEN TOTALE USD WAARDE VOOR DE GRAFIEK (DE FIX!) ---
+    let totalUsdValueForChart = 0;
+    const cryptos = [...new Set(rawBalancesArray.filter(b => b.currency !== 'USD').map(b => b.currency))];
+
+    try {
+        let prices = {};
+        if (cryptos.length > 0) {
+            // Gebruik de openbare Kraken API net als in PortfolioView (werkt altijd!)
+            const pairs = cryptos.map(c => `${c === 'BTC' ? 'XBT' : c}USD`).join(',');
+            const resP = await fetch(`https://api.kraken.com/0/public/Ticker?pair=${pairs}`);
+            const dataP = await resP.json();
+            if (!dataP.error) prices = dataP.result;
+        }
+
+        rawBalancesArray.forEach(b => {
+            if (b.currency === 'USD') {
+                totalUsdValueForChart += b.amount;
+            } else {
+                let searchCoin = b.currency === 'BTC' ? 'XBT' : b.currency;
+                let priceKey = Object.keys(prices).find(k => k.includes(searchCoin));
+                if (priceKey && prices[priceKey]) {
+                    totalUsdValueForChart += b.amount * parseFloat(prices[priceKey].c[0]);
+                }
+            }
+        });
+    } catch (e) { console.error("Kon live prijzen niet ophalen voor de grafiek", e); }
 
     // --- 4. GRAFIEK UPDATE ---
-    setEquityCurve(currentCurve => {
-        // Gebruik fallback naar localStorage als currentCurve leeg is
-        const prevCurve = currentCurve.length > 0 ? currentCurve : (JSON.parse(localStorage.getItem('kraken_equity_curve')) || []);
-        const lastValue = prevCurve[prevCurve.length - 1]?.value || 0;
-        
-        if (Math.abs(totalUsdValueForChart - lastValue) > 0.1 || prevCurve.length === 0) {
-            const newCurve = [...prevCurve, { time: now, value: totalUsdValueForChart }];
-            const trimmedCurve = newCurve.slice(-500); // Houd de laatste 500 datapunten
-            localStorage.setItem('kraken_equity_curve', JSON.stringify(trimmedCurve));
-            return trimmedCurve;
-        }
-        return prevCurve;
-    });
+    if (totalUsdValueForChart > 0) {
+        setEquityCurve(currentCurve => {
+            const prevCurve = currentCurve.length > 0 ? currentCurve : (JSON.parse(localStorage.getItem('kraken_equity_curve')) || []);
+            const lastValue = prevCurve[prevCurve.length - 1]?.value || 0;
+            
+            if (Math.abs(totalUsdValueForChart - lastValue) > 0.1 || prevCurve.length === 0) {
+                const newCurve = [...prevCurve, { time: now, value: totalUsdValueForChart }];
+                const trimmedCurve = newCurve.slice(-500); 
+                localStorage.setItem('kraken_equity_curve', JSON.stringify(trimmedCurve));
+                return trimmedCurve;
+            }
+            return prevCurve;
+        });
+    }
 
     setTimeout(() => fetchOrders(), 1000); 
   };
