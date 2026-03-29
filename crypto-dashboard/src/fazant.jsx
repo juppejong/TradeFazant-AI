@@ -77,6 +77,15 @@ export default function TradingDashboard() {
      const saved = localStorage.getItem('kraken_equity_curve');
      return saved ? (JSON.parse(saved) || []) : [];
   });
+  const playTradeSound = (type) => {
+    try {
+      const audio = new Audio(type === 'buy' ? '/sounds/buy.mp3' : '/sounds/sell.mp3');
+      audio.volume = 0.5; // Zet het volume op 50% zodat je niet schrikt
+      audio.play();
+    } catch (error) {
+      console.error("Geluid kon niet worden afgespeeld:", error);
+    }
+  };
 
   const [bots, setBots] = useState([]); 
   const [whaleTrades, setWhaleTrades] = useState([]); // Voeg deze regel toe
@@ -187,6 +196,7 @@ export default function TradingDashboard() {
                       buySignal = false; // Blokkeer de directe aankoop
                       state.phase = 'TRAILING_BUY';
                       state.extremePrice = botCurrentClose;
+                      updatedBot.state = { ...updatedBot.state, phase: 'TRAILING_BUY', extremePrice: botCurrentClose };
                       logMsg = `⏳ RSI hit! Start Trailing Buy vanaf $${botCurrentClose.toFixed(4)}`;
                   } else if (sellSignal) {
                       sellSignal = false; // Blokkeer de directe verkoop
@@ -269,6 +279,7 @@ export default function TradingDashboard() {
               state.lastAction = 'BUY';
               state.lastTradeTime = nowMs;
               state.phase = 'WAITING'; // Reset de trailing fase
+              playTradeSound('buy')
               
               updatedBot.logs.push({ 
                   time: new Date().toLocaleTimeString(), 
@@ -325,14 +336,20 @@ export default function TradingDashboard() {
 
                 if (!order.error) {
                   // 3. Bereken Winst/Verlies (We gebruiken state.totalVolume voor de originele investering)
+                  const exitPrice = botCurrentClose; 
+                  const entryPrice = state.averageEntryPrice || 0;
+                  const volume = state.totalVolume || 0;
                   const pnl = (botCurrentClose - state.averageEntryPrice) * state.totalVolume;
+                  const pnlPct = ((botCurrentClose - state.averageEntryPrice) / state.averageEntryPrice) * 100;
                   
-                  stats.trades.push({
-                      id: Date.now().toString().slice(-8),
-                      time: nowMs,
-                      entryPrice: state.averageEntryPrice,
-                      exitPrice: botCurrentClose,
-                      pnl: pnl
+                stats.trades.push({
+                    id: Date.now().toString().slice(-8),
+                    time: new Date().toLocaleString(),
+                    entryPrice: entryPrice,
+                    exitPrice: exitPrice, // ✅ Deze wordt nu expliciet opgeslagen
+                    volume: volume,
+                    pnl: pnl,
+                    pnlPct: pnlPct
                   });
                   
                   if (pnl >= 0) {
@@ -348,6 +365,7 @@ export default function TradingDashboard() {
                   state.lastAction = 'SELL';
                   state.lastTradeTime = nowMs;
                   state.phase = 'WAITING';
+                  playTradeSound('sell')
                   
                   updatedBot.logs.push({ 
                       time: new Date().toLocaleTimeString(), 
