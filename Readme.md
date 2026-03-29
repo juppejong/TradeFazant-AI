@@ -4,6 +4,8 @@
 > Built with **React** and **Node.js**, leveraging **Kraken**, **Coinbase Advanced**, and **Google Gemini AI**.
 
 TradeFazant AI is an advanced trading platform designed to bridge the gap between manual trading and algorithmic automation. It offers a sophisticated interface to manage your portfolio, run automated trading strategies, and utilize AI for real-time market analysis.
+<img width="1902" height="909" alt="image" src="https://github.com/user-attachments/assets/5da788ec-55e1-4022-a0ac-57e7fa400364" />
+
 
 ---
 
