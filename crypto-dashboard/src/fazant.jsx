@@ -6,14 +6,15 @@ import PortfolioView from './components/PortfolioView';
 import WhaleHubView from './components/WhaleHubView';
 import AiAdvisorView from './components/AiAdvisorView';
 import BotManagerView from './components/BotManagerView';
-import ScreenerView from './components/ScreenerView'; // ✅ Toegevoegd
-import MasterDashboardView from './components/MasterDashboardView'; // ✅ Toegevoegd
+import ScreenerView from './components/ScreenerView'; 
+import MasterDashboardView from './components/MasterDashboardView'; 
 import LiveTicker from './components/LiveTicker';
+import FearAndGreedGauge from './components/FearAndGreedGauge';
 import { useKrakenMarketData } from './utils/websocket';
 import TradingChart, { PopoutWindow } from './components/TradingChart';
 import { 
   Settings, BarChart2, Activity, Layers, ChevronDown, LineChart, Bot, Wallet, 
-  Maximize2, Search, User, LayoutGrid, Square, ExternalLink, Zap, // ✅ Zap toegevoegd
+  Maximize2, Search, User, LayoutGrid, Square, ExternalLink, Zap, 
   ChevronRight, ChevronLeft, Sparkles, Send, X, Trash2, Plus, Play, Pause, Crosshair,
   ShieldAlert, Target, TrendingUp, AlertTriangle, Clock, ArrowDownToLine, KeyRound, Waves, LayoutDashboard
 } from 'lucide-react';
@@ -35,6 +36,7 @@ export default function TradingDashboard() {
   
   const [rightPanelWidth, setRightPanelWidth] = useState(560);
   const [isResizing, setIsResizing] = useState(false);
+  const [toasts, setToasts] = useState([]);
 
   const [showSettings, setShowSettings] = useState(false);
   const [apiKeys, setApiKeys] = useState(() => {
@@ -333,7 +335,8 @@ export default function TradingDashboard() {
                   state.lastAction = 'BUY';
                   state.lastTradeTime = nowMs;
                   state.phase = 'WAITING'; 
-                  playTradeSound('buy');
+                 //playTradeSound('buy');
+                  addToast('Bot Aankoop', `✅ ${updatedBot.pair.display} gekocht voor $${botCurrentClose.toFixed(4)}`, 'buy');
                   
                   updatedBot.logs.unshift({ time: new Date().toLocaleTimeString(), msg: `✅ AUTO BUY SUCCESS @ $${botCurrentClose.toFixed(4)}`, type: 'buy' });
 
@@ -414,7 +417,12 @@ export default function TradingDashboard() {
                   state.lastAction = 'SELL';
                   state.lastTradeTime = nowMs;
                   state.phase = 'WAITING';
-                  playTradeSound(pnl >= 0 ? 'profit' : 'loss');
+                  //playTradeSound(pnl >= 0 ? 'profit' : 'loss');
+                  addToast(
+                      pnl >= 0 ? 'Winst Gerealiseerd! 💰' : 'Stop-Loss Geraakt 📉', 
+                      `Verkocht: ${updatedBot.pair.display} | PnL: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}`, 
+                      pnl >= 0 ? 'success' : 'loss'
+                  );
 
                   if (!updatedBot.stats) updatedBot.stats = { trades: [], winCount: 0, lossCount: 0, grossProfit: 0, grossLoss: 0 };
                   updatedBot.stats.trades.push({
@@ -607,6 +615,16 @@ if (logMsg !== updatedBot.lastLog) {
     } catch (e) { }
   };
   useEffect(() => { fetchOrdersRef.current = fetchOrders; });
+
+  const addToast = (title, message, type = 'info') => {
+      const id = Math.random().toString(36).substr(2, 9);
+      setToasts(prev => [...prev, { id, title, message, type }]);
+      
+      // Haalt hem na 5 seconden weer netjes weg
+      setTimeout(() => {
+          setToasts(prev => prev.filter(t => t.id !== id));
+      }, 5000);
+  };
 
   // ==========================================
   // 💰 FETCH BALANCES & EQUITY
@@ -970,6 +988,9 @@ const fetchBalances = async () => {
                 <span className="text-zinc-200 font-bold">{getBalance(activePair.base).toFixed(4)}</span>
                 <span className="text-zinc-500 uppercase tracking-tighter">{activePair.base.replace('XBT', 'BTC')} Balance</span>
               </div>
+              <div className="h-[50px]">
+                  <FearAndGreedGauge />
+              </div>
             </div>
           <div className="flex-1"></div>
           <div className="flex items-center pl-6 border-l border-zinc-800 ml-4">
@@ -1126,6 +1147,42 @@ const fetchBalances = async () => {
             </div>
           </div>
         )}
+
+        {/* 🔔 TOAST NOTIFICATIES */}
+        <div className="fixed bottom-16 right-6 z-[9999] flex flex-col gap-3 pointer-events-none">
+          <style>{`
+            @keyframes slide-in-right {
+              from { transform: translateX(120%); opacity: 0; }
+              to { transform: translateX(0); opacity: 1; }
+            }
+            .animate-toast { animation: slide-in-right 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+          `}</style>
+
+          {toasts.map(toast => {
+             const isSuccess = toast.type === 'buy' || toast.type === 'success';
+             const isError = toast.type === 'loss' || toast.type === 'error';
+             
+             const iconColor = isSuccess ? 'text-emerald-400' : isError ? 'text-rose-400' : 'text-blue-400';
+             const borderColor = isSuccess ? 'border-emerald-500/30' : isError ? 'border-rose-500/30' : 'border-blue-500/30';
+             const bgColor = isSuccess ? 'bg-emerald-900/20' : isError ? 'bg-rose-900/20' : 'bg-blue-900/20';
+
+             return (
+               <div key={toast.id} className={`flex items-start p-4 w-80 rounded-2xl border backdrop-blur-xl shadow-2xl pointer-events-auto animate-toast bg-[#0b0e11]/90 ${bgColor} ${borderColor}`}>
+                 <div className={`mt-0.5 mr-3 ${iconColor}`}>
+                   {isSuccess ? <Target size={18} /> : isError ? <AlertTriangle size={18} /> : <Zap size={18} />}
+                 </div>
+                 <div className="flex-1 flex flex-col">
+                   <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">{toast.title}</span>
+                   <span className="text-sm text-zinc-100 font-medium mt-0.5 leading-snug">{toast.message}</span>
+                 </div>
+                 <button onClick={() => setToasts(prev => prev.filter(t => t.id !== toast.id))} className="text-zinc-500 hover:text-white transition ml-3">
+                   <X size={16} />
+                 </button>
+               </div>
+             );
+          })}
+        </div>
+
         <LiveTicker />
       </div>
     </div>
