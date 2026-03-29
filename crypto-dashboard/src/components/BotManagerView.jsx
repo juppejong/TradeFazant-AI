@@ -95,9 +95,10 @@ const BotLogTerminal = ({ logs }) => {
 // 🤖 MAIN BOT MANAGER VIEW
 // ==========================================
 
-const BotManagerView = ({ bots, setBots, availablePairs, activePair }) => {
+const BotManagerView = ({ bots, setBots, availablePairs, activePair, setActivePair }) => {
   const [isCreating, setIsCreating] = useState(false);
   const [editingBotId, setEditingBotId] = useState(null);
+  const [useSmartLimit, setUseSmartLimit] = useState(true);
   
   // --- FORM STATES ---
   const [newBotPair, setNewBotPair] = useState(activePair);
@@ -166,6 +167,7 @@ const BotManagerView = ({ bots, setBots, availablePairs, activePair }) => {
   // --- ACTIONS ---
   const startEditing = (bot) => {
     setEditingBotId(bot.id);
+    setUseSmartLimit(cfg.useSmartLimit ?? true);
     setNewBotPair(bot.pair);
     setNewBotStrategy(bot.strategy);
     const cfg = bot.config || {};
@@ -212,7 +214,7 @@ const BotManagerView = ({ bots, setBots, availablePairs, activePair }) => {
         timeframe: botTimeframe, sizingType: 'percent', tradePercent: parseNum(tradePercent),
         slPct: parseNum(slPct), tpPct: parseNum(tpPct),
         useTrailing, trailingPct: parseNum(trailingPct),
-        useBreakEven, breakEvenTrigger: parseNum(breakEvenTrigger),
+        useBreakEven, breakEvenTrigger: parseNum(breakEvenTrigger),useSmartLimit,
         useCircuitBreaker, maxConsecutiveLosses: parseInt(maxConsecutiveLosses),
         rsiPeriod: parseInt(rsiPeriod), rsiBuyLevel: parseInt(rsiBuyLevel), rsiSellLevel: parseInt(rsiSellLevel),
         useDynamicRisk, atrMultiplierSL: parseNum(atrMultiplierSL), atrMultiplierTP: parseNum(atrMultiplierTP),
@@ -311,10 +313,11 @@ const BotManagerView = ({ bots, setBots, availablePairs, activePair }) => {
                 body: JSON.stringify({ 
                     pair: orderPair, 
                     type: 'buy', 
-                    ordertype: 'market', 
+                    ordertype: bot.config.useSmartLimit ? 'limit' : 'market', 
                     volume: volumeToBuy,
-                    quoteVolume: spendAmount.toFixed(2)
-                }) 
+                    quoteVolume: spendAmount.toFixed(2),
+                    price: currentPrice.toString() // Nodig voor limit orders!
+                })
             });
             const oData = await resOrder.json();
             if (oData.error) throw new Error(isCoinbase ? JSON.stringify(oData.error) : oData.error);
@@ -344,7 +347,13 @@ const BotManagerView = ({ bots, setBots, availablePairs, activePair }) => {
             const orderEndpoint = isCoinbase ? '/api/coinbase/order' : '/api/order';
             const resOrder = await fetch(`${API_BASE}${orderEndpoint}`, { 
                 method: 'POST', headers: getApiHeaders(), 
-                body: JSON.stringify({ pair: orderPair, type: 'sell', ordertype: 'market', volume: volToSell }) 
+                body: JSON.stringify({ 
+                    pair: orderPair, 
+                    type: 'sell', 
+                    ordertype: bot.config.useSmartLimit ? 'limit' : 'market', 
+                    volume: volToSell,
+                    price: currentPrice.toString()
+                })
             });
             const oData = await resOrder.json();
             if (oData.error) throw new Error(isCoinbase ? JSON.stringify(oData.error) : oData.error);
@@ -616,6 +625,15 @@ const BotManagerView = ({ bots, setBots, availablePairs, activePair }) => {
                     </h4>
                     <div className="space-y-1"><label className="text-[10px] text-zinc-500 font-bold uppercase">Risk per trade (%)</label><div className="relative"><input type="number" value={tradePercent} onChange={e => setTradePercent(e.target.value)} className="w-full bg-[#050505] border border-zinc-800 rounded p-2.5 text-sm text-zinc-200 outline-none" /><span className="absolute right-4 top-2 text-zinc-500 font-bold">%</span></div></div>
                   </div>
+                  <div className={`p-5 rounded-2xl border transition-all ${useSmartLimit ? 'bg-indigo-500/5 border-indigo-500/30 shadow-lg' : 'bg-[#09090b] border-zinc-800/50'}`}>
+                    <div className="flex justify-between items-center mb-3">
+                       <h4 className="text-xs uppercase text-indigo-400 font-bold flex items-center gap-2">
+                         <Layers size={14}/> Fee Optimization (Maker)
+                         <InfoTooltip text="Verandert agressieve Market orders in slimme Limit orders. Bespaart enorm op transactiekosten." />
+                       </h4>
+                       <label className="flex items-center space-x-2 cursor-pointer"><input type="checkbox" checked={useSmartLimit} onChange={e => setUseSmartLimit(e.target.checked)} className="accent-indigo-500 w-4 h-4" /><span className="text-[10px] text-indigo-400 font-bold uppercase">ON</span></label>
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -675,6 +693,7 @@ const BotManagerView = ({ bots, setBots, availablePairs, activePair }) => {
                           </div>
 
                         <div className="flex bg-black/50 border border-white/5 rounded-2xl p-1.5 backdrop-blur-md">
+                          <button onClick={() => {if (setActivePair) setActivePair(bot.pair);}}className="p-2 text-zinc-500 hover:text-indigo-400 transition-colors"title="Bekijk op de grafiek"><Eye size={18} /></button>
                           <button onClick={() => setBots(bots.map(b => b.id === bot.id ? { ...b, isRunning: !b.isRunning } : b))} className="p-2 transition-colors group/btn" title={bot.isRunning ? "Pause Bot" : "Start Bot"}>
                             {bot.isRunning ? <Pause size={18} className="text-amber-500 group-hover/btn:scale-110 transition-transform" /> : <Play size={18} className="text-emerald-500 group-hover/btn:scale-110 transition-transform" />}
                           </button>

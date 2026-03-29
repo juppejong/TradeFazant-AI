@@ -8,6 +8,7 @@ import AiAdvisorView from './components/AiAdvisorView';
 import BotManagerView from './components/BotManagerView';
 import ScreenerView from './components/ScreenerView'; // ✅ Toegevoegd
 import MasterDashboardView from './components/MasterDashboardView'; // ✅ Toegevoegd
+import LiveTicker from './components/LiveTicker';
 import { useKrakenMarketData } from './utils/websocket';
 import TradingChart, { PopoutWindow } from './components/TradingChart';
 import { 
@@ -46,6 +47,18 @@ export default function TradingDashboard() {
   
   const [aiMessages, setAiMessages] = useState([{ role: 'model', text: `Hello! I am your Google Gemini Trading Advisor.` }]);
   const activePair = gridPairs[activeIndex] || { id: 'XXBTZUSD', altname: 'XBTUSD', display: 'BTC/USD', base: 'BTC', quote: 'USD', wsname: 'XBT/USD' };
+
+  const handleSetActivePair = (targetPair) => {
+      // 1. Forceer de munt van de bot in de huidige actieve grafiek
+      setGridPairs(prev => { 
+          const newGrid = [...prev]; 
+          newGrid[activeIndex] = targetPair; 
+          return newGrid; 
+      });
+      
+      // 2. Schakel direct over naar het tabblad met de grafieken
+      setCurrentView('charts');
+    };
 
   const [layout, setLayout] = useState(1);
   const [popoutCharts, setPopoutCharts] = useState([]);
@@ -306,9 +319,10 @@ export default function TradingDashboard() {
                   body: JSON.stringify({ 
                       pair: orderPair, 
                       type: 'buy', 
-                      ordertype: 'market', 
+                      ordertype: cfg.useSmartLimit ? 'limit' : 'market', 
                       volume: vol,
-                      quoteVolume: spendAmount.toFixed(2)
+                      quoteVolume: spendAmount.toFixed(2),
+                      price: botCurrentClose.toString()
                   })
                 });
                 const order = await res.json();
@@ -381,7 +395,13 @@ export default function TradingDashboard() {
                 const res = await fetch(orderEndpoint, {
                   method: 'POST',
                   headers: getApiHeaders(),
-                  body: JSON.stringify({ pair: orderPair, type: 'sell', ordertype: 'market', volume: volToSell })
+                  body: JSON.stringify({ 
+                      pair: orderPair, 
+                      type: 'sell', 
+                      ordertype: cfg.useSmartLimit ? 'limit' : 'market', 
+                      volume: volToSell,
+                      price: botCurrentClose.toString()
+                  })
                 });
                 const order = await res.json();
                 
@@ -977,7 +997,7 @@ const fetchBalances = async () => {
         {currentView === 'screener' && <ScreenerView onDeployBot={handleDeployFromScreener} />}
         {currentView === 'ai' && <AiAdvisorView activePair={activePair} aiMessages={aiMessages} setAiMessages={setAiMessages} timeframe={timeframe} />}
         {currentView === 'portfolio' && <PortfolioView balances={balances} scriptLoaded={scriptLoaded} equityCurve={equityCurve} onRefresh={fetchBalances} tradeHistory={tradeHistory} />}
-        {currentView === 'bots' && <BotManagerView bots={bots} setBots={setBots} availablePairs={availablePairs} activePair={activePair} />}
+        {currentView === 'bots' && <BotManagerView bots={bots} setBots={setBots} availablePairs={availablePairs} activePair={activePair} setActivePair={handleSetActivePair} />}
         {currentView === 'whales' && <WhaleHubView activePair={activePair} />}
 
         {currentView === 'charts' && (
@@ -1106,6 +1126,7 @@ const fetchBalances = async () => {
             </div>
           </div>
         )}
+        <LiveTicker />
       </div>
     </div>
   );

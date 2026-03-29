@@ -127,15 +127,24 @@ app.post('/api/coinbase/order', async (req, res) => {
             algorithm: 'ES256', header: { kid: cbKey, nonce: crypto.randomBytes(16).toString('hex') }
         });
 
-        // 3. Coinbase Market Order Configuratie
+        // 3. Coinbase Smart Order Configuratie
         const client_order_id = crypto.randomBytes(16).toString('hex');
         let order_configuration = {};
 
-        if (type.toUpperCase() === 'BUY') {
-            // Market Buy vereist quote_size (bedrag in USD/USDC)
+        if (req.body.ordertype === 'limit') {
+            // Smart Limit Order (Maker)
+            order_configuration = { 
+                limit_limit_gtc: { 
+                    base_size: volume.toString(),
+                    limit_price: req.body.price.toString(),
+                    post_only: true // 🔥 DIT IS DE MAGIE: Forceert de lage 'Maker' fee!
+                } 
+            };
+        } else if (type.toUpperCase() === 'BUY') {
+            // Market Buy
             order_configuration = { market_market_ioc: { quote_size: quoteVolume.toString() } };
         } else {
-            // Market Sell vereist base_size (bedrag in Crypto)
+            // Market Sell
             order_configuration = { market_market_ioc: { base_size: volume.toString() } };
         }
 
