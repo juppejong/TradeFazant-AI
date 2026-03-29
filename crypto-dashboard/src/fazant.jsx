@@ -1,18 +1,20 @@
 import React, { useState, useEffect, useRef } from 'react';
 import ReactDOM from 'react-dom';
 import { calculateSMA, calculateEMA, calculateMACD, calculateBB, calculateRSI } from './utils/indicators';
-import { tfMap, getApiHeaders, fetchKrakenPairs, fetchKrakenOHLC } from './utils/api';
+import { tfMap, getApiHeaders, fetchKrakenPairs, fetchKrakenOHLC, fetchCoinbaseBalances } from './utils/api';
 import PortfolioView from './components/PortfolioView';
 import WhaleHubView from './components/WhaleHubView';
 import AiAdvisorView from './components/AiAdvisorView';
 import BotManagerView from './components/BotManagerView';
-import ScreenerView from './components/ScreenerView'; // ✅ Toegevoegd
-import MasterDashboardView from './components/MasterDashboardView'; // ✅ Toegevoegd
+import ScreenerView from './components/ScreenerView'; 
+import MasterDashboardView from './components/MasterDashboardView'; 
+import LiveTicker from './components/LiveTicker';
+import FearAndGreedGauge from './components/FearAndGreedGauge';
 import { useKrakenMarketData } from './utils/websocket';
 import TradingChart, { PopoutWindow } from './components/TradingChart';
 import { 
   Settings, BarChart2, Activity, Layers, ChevronDown, LineChart, Bot, Wallet, 
-  Maximize2, Search, User, LayoutGrid, Square, ExternalLink, Zap, // ✅ Zap toegevoegd
+  Maximize2, Search, User, LayoutGrid, Square, ExternalLink, Zap, 
   ChevronRight, ChevronLeft, Sparkles, Send, X, Trash2, Plus, Play, Pause, Crosshair,
   ShieldAlert, Target, TrendingUp, AlertTriangle, Clock, ArrowDownToLine, KeyRound, Waves, LayoutDashboard
 } from 'lucide-react';
@@ -34,15 +36,31 @@ export default function TradingDashboard() {
   
   const [rightPanelWidth, setRightPanelWidth] = useState(560);
   const [isResizing, setIsResizing] = useState(false);
+  const [toasts, setToasts] = useState([]);
 
   const [showSettings, setShowSettings] = useState(false);
   const [apiKeys, setApiKeys] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('trading_api_keys')) || { krakenKey: '', krakenSecret: '', geminiKey: '' }; }
-    catch { return { krakenKey: '', krakenSecret: '', geminiKey: '' }; }
+    try { 
+      return JSON.parse(localStorage.getItem('trading_api_keys')) || 
+      { krakenKey: '', krakenSecret: '', geminiKey: '', cbKey: '', cbSecret: '' }; 
+    }
+    catch { return { krakenKey: '', krakenSecret: '', geminiKey: '', cbKey: '', cbSecret: '' }; }
   });
   
   const [aiMessages, setAiMessages] = useState([{ role: 'model', text: `Hello! I am your Google Gemini Trading Advisor.` }]);
   const activePair = gridPairs[activeIndex] || { id: 'XXBTZUSD', altname: 'XBTUSD', display: 'BTC/USD', base: 'BTC', quote: 'USD', wsname: 'XBT/USD' };
+
+  const handleSetActivePair = (targetPair) => {
+      // 1. Forceer de munt van de bot in de huidige actieve grafiek
+      setGridPairs(prev => { 
+          const newGrid = [...prev]; 
+          newGrid[activeIndex] = targetPair; 
+          return newGrid; 
+      });
+      
+      // 2. Schakel direct over naar het tabblad met de grafieken
+      setCurrentView('charts');
+    };
 
   const [layout, setLayout] = useState(1);
   const [popoutCharts, setPopoutCharts] = useState([]);
@@ -56,7 +74,7 @@ export default function TradingDashboard() {
   });
 
   const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [balances, setBalances] = useState({ USD: 0, BTC: 0, ETH: 0, SOL: 0 });
+  const [balances, setBalances] = useState([]);
   const [tradeSide, setTradeSide] = useState('Buy'); 
   const [orderType, setOrderType] = useState('Limit');
   const [activeTab, setActiveTab] = useState('positions');
@@ -188,45 +206,44 @@ export default function TradingDashboard() {
 
 
           // 4. Trailing Intercept & Logic (Opgelost!)
-// 4. Trailing Intercept & Logic (Waterdicht)
+          // 4. Trailing Intercept & Logic (MOET VOOR DE EXECUTIE STAAN)
           if (cfg.useTrailing) {
-              // A. Intercept de RSI signalen als de bot aan het wachten is
               if (state.phase === 'WAITING') {
                   if (buySignal) {
-                      buySignal = false; // Blokkeer de directe aankoop
+                      // KAPERING: Reset het signaal zodat stap 6 niet direct koopt
+                      buySignal = false; 
                       state.phase = 'TRAILING_BUY';
                       state.extremePrice = botCurrentClose;
-                      updatedBot.state = { ...updatedBot.state, phase: 'TRAILING_BUY', extremePrice: botCurrentClose };
                       logMsg = `⏳ RSI hit! Start Trailing Buy vanaf $${botCurrentClose.toFixed(4)}`;
                   } else if (sellSignal) {
-                      sellSignal = false; // Blokkeer de directe verkoop
+                      // KAPERING: Reset het signaal zodat stap 6 niet direct verkoopt
+                      sellSignal = false; 
                       state.phase = 'TRAILING_SELL';
                       state.extremePrice = botCurrentClose;
                       logMsg = `⏳ Target hit! Start Trailing Sell vanaf $${botCurrentClose.toFixed(4)}`;
                   }
               } 
-              // B. Voer de trailing logica uit als hij al aan het zoeken is
               else if (state.phase === 'TRAILING_BUY') {
-                  buySignal = false; // 🛑 FORCEER FALSE: Pas kopen als reversal geraakt is!
+                  buySignal = false; // Altijd false houden zolang we in de fase zitten
                   
                   if (botCurrentClose < state.extremePrice) {
                       state.extremePrice = botCurrentClose;
-                      logMsg = `👇 Nieuwe bodem gevonden: $${botCurrentClose.toFixed(4)}`;
+                      logMsg = `👇 Lagere bodem: $${botCurrentClose.toFixed(4)}`;
                   } else if (botCurrentClose >= state.extremePrice * (1 + cfg.trailingPct / 100)) {
-                      buySignal = true; // Trailing percentage geraakt, nu mag hij écht kopen!
-                      state.phase = 'WAITING'; // Reset de fase
+                      buySignal = true; // NU pas mag er echt gekocht worden
+                      state.phase = 'WAITING';
                       logMsg = `🟢 Trailing Reversal! Kopen op $${botCurrentClose.toFixed(4)}`;
                   } else {
                       logMsg = `📉 Trailing Buy... Wacht op ${cfg.trailingPct}% stijging vanaf $${state.extremePrice.toFixed(4)}`;
                   }
               } else if (state.phase === 'TRAILING_SELL') {
-                  sellSignal = false; // 🛑 FORCEER FALSE: Pas verkopen als reversal geraakt is!
+                  sellSignal = false; // Altijd false houden zolang we in de fase zitten
                   
                   if (botCurrentClose > state.extremePrice) {
                       state.extremePrice = botCurrentClose;
-                      logMsg = `👆 Nieuwe piek gevonden: $${botCurrentClose.toFixed(4)}`;
+                      logMsg = `👆 Hogere piek: $${botCurrentClose.toFixed(4)}`;
                   } else if (botCurrentClose <= state.extremePrice * (1 - cfg.trailingPct / 100)) {
-                      sellSignal = true; // Trailing percentage geraakt, nu mag hij écht verkopen!
+                      sellSignal = true; // NU pas mag er echt verkocht worden
                       state.phase = 'WAITING';
                       logMsg = `🔴 Trailing Reversal! Verkopen op $${botCurrentClose.toFixed(4)}`;
                   } else {
@@ -255,145 +272,191 @@ export default function TradingDashboard() {
             } catch (e) { buySignal = false; sellSignal = false; }
           }
 
-          // 6. Execution (Nu met veilige marge en zichtbare Error logs!)
+// 6. Execution (Nu met Coinbase USDC Routing!)
           if (buySignal && state.totalVolume === 0) {
-            state.isProcessing = true; // LOCK AAN
-            
-            // 2% veiligheidsmarge net als bij manual trading, om Kraken fees en slippage op te vangen
-            const safeQuoteBalance = (currentBalances[updatedBot.pair.quote] || 0) * 0.98;
-            
-            const vol = cfg.sizingType === 'percent' 
-              ? (safeQuoteBalance * (cfg.tradePercent / 100)) / botCurrentClose 
-              : cfg.tradeAmount;
-
-            const res = await fetch('http://localhost:3001/api/order', {
-              method: 'POST',
-              headers: getApiHeaders(),
-              body: JSON.stringify({ pair: updatedBot.pair.altname, type: 'buy', ordertype: 'market', volume: vol.toFixed(8) })
-            });
-            const order = await res.json();
-            
-            if (!order.error) {
-              state.totalVolume = vol;
-              state.averageEntryPrice = botCurrentClose;
-              state.lastAction = 'BUY';
-              state.lastTradeTime = nowMs;
-              state.phase = 'WAITING'; // Reset de trailing fase
-              playTradeSound('buy')
-              
-              updatedBot.logs.push({ 
-                  time: new Date().toLocaleTimeString(), 
-                  msg: `✅ BUY SUCCESSFUL @ $${botCurrentClose.toFixed(4)}`, 
-                  type: 'buy' 
-              });
-
-              // 🔥 FORCEER DIRECTE OPSLAG NAAR SERVER (De Fix!)
-              const newBotsArray = botsRef.current.map(b => b.id === updatedBot.id ? updatedBot : b);
-              fetch('http://localhost:3001/api/bots', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify(newBotsArray)
-              }).catch(err => console.error("Fout bij opslaan bot state:", err));
-
-              // Ververs grafieken en balansen
-              if (typeof fetchBalances === 'function') fetchBalances();
-              if (typeof fetchOrders === 'function') setTimeout(() => fetchOrders(), 2000);
-
-            } else {
-              logMsg = `❌ Auto-Buy Failed: ${order.error}`;
-              updatedBot.logs.push({ time: new Date().toLocaleTimeString(), msg: logMsg, type: 'error' });
-              state.phase = 'WAITING';
-            }
-            state.isProcessing = false; // LOCK UIT
-          }
-
-// -- HIER BEGINT DE VERKOOP LOGICA --
-          else if (sellSignal && state.totalVolume > 0) {
-            state.isProcessing = true; // LOCK AAN
+            state.isProcessing = true; 
             
             try {
-                // 1. Haal EERST de actuele live-balans op van deze specifieke munt
+                const isCoinbase = updatedBot.config?.exchange === 'Coinbase';
                 const displayParts = updatedBot.pair.display.split('/');
-                const detectedBase = updatedBot.pair.base || displayParts[0];
-                const baseKey = detectedBase === 'BTC' ? 'XXBT' : (detectedBase === 'ETH' ? 'XETH' : detectedBase);
+                const cleanBase = displayParts[0] === 'XBT' ? 'BTC' : displayParts[0];
+                const cleanQuote = displayParts[1] || 'USD';
                 
-                const resBal = await fetch('http://localhost:3001/api/balance', { method: 'POST', headers: getApiHeaders() });
-                const bData = await resBal.json();
-                
-                // Hoeveel staat er écht in de wallet?
-                const actualBaseBalance = parseFloat(bData[baseKey] || bData[detectedBase] || 0);
-                
-                // Verkoop letterlijk alles wat we hebben van deze munt (met de interne state als fallback)
-                const volToSell = actualBaseBalance > 0 ? actualBaseBalance : state.totalVolume;
+                // 🪄 DE MAGISCHE TRUC VOOR DE AUTO-BOT
+                let orderPair = updatedBot.pair.altname;
+                if (isCoinbase) {
+                    const targetQuote = cleanQuote === 'USD' ? 'USDC' : cleanQuote;
+                    orderPair = `${cleanBase}-${targetQuote}`;
+                }
 
-                // 2. Schiet de verkooporder in met het ECHTE volume
-                const res = await fetch('http://localhost:3001/api/order', {
+                let quoteBalance = 0;
+                if (isCoinbase) {
+                    const resBal = await fetch('http://localhost:3001/api/coinbase/balance', { method: 'POST', headers: getApiHeaders() });
+                    const bData = await resBal.json();
+                    const acc = bData.find(a => a.currency === cleanQuote);
+                    quoteBalance = acc ? acc.amount : 0;
+                    if (cleanQuote === 'USD') {
+                        const usdcAcc = bData.find(a => a.currency === 'USDC');
+                        if (usdcAcc) quoteBalance += usdcAcc.amount;
+                    }
+                } else {
+                    const resBal = await fetch('http://localhost:3001/api/balance', { method: 'POST', headers: getApiHeaders() });
+                    const bData = await resBal.json();
+                    const quoteKey = cleanQuote === 'USD' ? 'ZUSD' : (cleanQuote === 'EUR' ? 'ZEUR' : cleanQuote);
+                    quoteBalance = parseFloat(bData[baseKey] || bData[cleanBase] || 0);
+                }
+
+                const safeQuoteBalance = quoteBalance * 0.98;
+                const spendAmount = safeQuoteBalance * (cfg.tradePercent / 100);
+                const vol = Number((spendAmount / botCurrentClose).toFixed(8));
+
+                if (spendAmount <= 0 || isNaN(vol)) {
+                    throw new Error(`Onvoldoende balans op ${updatedBot.config?.exchange || 'Kraken'} (${quoteBalance.toFixed(2)} beschikbaar)`);
+                }
+
+                const orderEndpoint = isCoinbase ? 'http://localhost:3001/api/coinbase/order' : 'http://localhost:3001/api/order';
+                const res = await fetch(orderEndpoint, {
                   method: 'POST',
                   headers: getApiHeaders(),
-                  body: JSON.stringify({ pair: updatedBot.pair.altname, type: 'sell', ordertype: 'market', volume: volToSell.toFixed(8) })
+                  body: JSON.stringify({ 
+                      pair: orderPair, 
+                      type: 'buy', 
+                      ordertype: cfg.useSmartLimit ? 'limit' : 'market', 
+                      volume: vol,
+                      quoteVolume: spendAmount.toFixed(2),
+                      price: botCurrentClose.toString()
+                  })
                 });
                 const order = await res.json();
-
+                
                 if (!order.error) {
-                  // 3. Bereken Winst/Verlies (We gebruiken state.totalVolume voor de originele investering)
-                  const exitPrice = botCurrentClose; 
-                  const entryPrice = state.averageEntryPrice || 0;
-                  const volume = state.totalVolume || 0;
-                  const pnl = (botCurrentClose - state.averageEntryPrice) * state.totalVolume;
-                  const pnlPct = ((botCurrentClose - state.averageEntryPrice) / state.averageEntryPrice) * 100;
-                  
-                stats.trades.push({
-                    id: Date.now().toString().slice(-8),
-                    time: new Date().toLocaleString(),
-                    entryPrice: entryPrice,
-                    exitPrice: exitPrice, // ✅ Deze wordt nu expliciet opgeslagen
-                    volume: volume,
-                    pnl: pnl,
-                    pnlPct: pnlPct
-                  });
-                  
-                  if (pnl >= 0) {
-                      stats.winCount = (stats.winCount || 0) + 1;
-                      stats.grossProfit = (stats.grossProfit || 0) + pnl;
-                  } else {
-                      stats.lossCount = (stats.lossCount || 0) + 1;
-                      stats.grossLoss = (stats.grossLoss || 0) + Math.abs(pnl);
-                  }
-
-                  state.totalVolume = 0;
-                  state.averageEntryPrice = 0;
-                  state.lastAction = 'SELL';
+                  state.totalVolume = vol;
+                  state.averageEntryPrice = botCurrentClose;
+                  state.lastAction = 'BUY';
                   state.lastTradeTime = nowMs;
-                  state.phase = 'WAITING';
-                  playTradeSound('sell')
+                  state.phase = 'WAITING'; 
+                 //playTradeSound('buy');
+                  addToast('Bot Aankoop', `✅ ${updatedBot.pair.display} gekocht voor $${botCurrentClose.toFixed(4)}`, 'buy');
                   
-                  updatedBot.logs.push({ 
-                      time: new Date().toLocaleTimeString(), 
-                      msg: `✅ SELL SUCCESSFUL @ $${botCurrentClose.toFixed(4)} (Sold: ${volToSell.toFixed(4)} | PnL: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)})`, 
-                      type: 'sell' 
-                  });
+                  updatedBot.logs.unshift({ time: new Date().toLocaleTimeString(), msg: `✅ AUTO BUY SUCCESS @ $${botCurrentClose.toFixed(4)}`, type: 'buy' });
 
-                  // 🔥 FORCEER DIRECTE OPSLAG NAAR SERVER
                   const newBotsArray = botsRef.current.map(b => b.id === updatedBot.id ? updatedBot : b);
                   fetch('http://localhost:3001/api/bots', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify(newBotsArray)
+                      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newBotsArray)
                   }).catch(err => console.error("Fout bij opslaan bot state:", err));
 
                   if (typeof fetchBalances === 'function') fetchBalances();
                   if (typeof fetchOrders === 'function') setTimeout(() => fetchOrders(), 2000);
 
                 } else {
-                  logMsg = `❌ Auto-Sell Failed: ${order.error}`;
-                  updatedBot.logs.push({ time: new Date().toLocaleTimeString(), msg: logMsg, type: 'error' });
+                  logMsg = `❌ Auto-Buy Failed: ${isCoinbase ? JSON.stringify(order.error) : order.error}`;
+                  updatedBot.logs.unshift({ time: new Date().toLocaleTimeString(), msg: logMsg, type: 'error' });
+                  state.phase = 'WAITING'; 
+                }
+            } catch (err) {
+                logMsg = `❌ Pre-Buy Error: ${err.message}`;
+                updatedBot.logs.unshift({ time: new Date().toLocaleTimeString(), msg: logMsg, type: 'error' });
+                state.phase = 'WAITING';
+            }
+            state.isProcessing = false; 
+          }
+          // -- HIER BEGINT DE VERKOOP LOGICA --
+          else if (sellSignal && state.totalVolume > 0) {
+            state.isProcessing = true;
+            try {
+                const isCoinbase = updatedBot.config?.exchange === 'Coinbase';
+                const displayParts = updatedBot.pair.display.split('/');
+                const cleanBase = displayParts[0] === 'XBT' ? 'BTC' : displayParts[0];
+                const cleanQuote = displayParts[1] || 'USD';
+                
+                let orderPair = updatedBot.pair.altname;
+                if (isCoinbase) {
+                    const targetQuote = cleanQuote === 'USD' ? 'USDC' : cleanQuote;
+                    orderPair = `${cleanBase}-${targetQuote}`;
+                }
+
+                let actualBaseBalance = 0;
+                if (isCoinbase) {
+                    const resBal = await fetch('http://localhost:3001/api/coinbase/balance', { method: 'POST', headers: getApiHeaders() });
+                    const bData = await resBal.json();
+                    const acc = bData.find(a => a.currency === cleanBase);
+                    actualBaseBalance = acc ? acc.amount : 0;
+                } else {
+                    const resBal = await fetch('http://localhost:3001/api/balance', { method: 'POST', headers: getApiHeaders() });
+                    const bData = await resBal.json();
+                    const baseKey = cleanBase === 'BTC' ? 'XXBT' : (cleanBase === 'ETH' ? 'XETH' : cleanBase);
+                    actualBaseBalance = parseFloat(bData[baseKey] || bData[cleanBase] || bData['X' + cleanBase] || 0);
+                }
+
+                const volToSell = Math.min(Number(state.totalVolume.toFixed(8)), actualBaseBalance);
+                
+                if (volToSell <= 0) {
+                    throw new Error(`Geen ${cleanBase} positie gevonden om te verkopen.`);
+                }
+
+                const orderEndpoint = isCoinbase ? 'http://localhost:3001/api/coinbase/order' : 'http://localhost:3001/api/order';
+                const res = await fetch(orderEndpoint, {
+                  method: 'POST',
+                  headers: getApiHeaders(),
+                  body: JSON.stringify({ 
+                      pair: orderPair, 
+                      type: 'sell', 
+                      ordertype: cfg.useSmartLimit ? 'limit' : 'market', 
+                      volume: volToSell,
+                      price: botCurrentClose.toString()
+                  })
+                });
+                const order = await res.json();
+                
+                if (!order.error) {
+                  const pnl = (botCurrentClose - state.averageEntryPrice) * volToSell;
+                  const pnlPct = ((botCurrentClose - state.averageEntryPrice) / state.averageEntryPrice) * 100;
+
+                  state.totalVolume = 0;
+                  state.averageEntryPrice = 0;
+                  state.lastAction = 'SELL';
+                  state.lastTradeTime = nowMs;
+                  state.phase = 'WAITING';
+                  //playTradeSound(pnl >= 0 ? 'profit' : 'loss');
+                  addToast(
+                      pnl >= 0 ? 'Winst Gerealiseerd! 💰' : 'Stop-Loss Geraakt 📉', 
+                      `Verkocht: ${updatedBot.pair.display} | PnL: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}`, 
+                      pnl >= 0 ? 'success' : 'loss'
+                  );
+
+                  if (!updatedBot.stats) updatedBot.stats = { trades: [], winCount: 0, lossCount: 0, grossProfit: 0, grossLoss: 0 };
+                  updatedBot.stats.trades.push({
+                      id: Date.now().toString().slice(-8), time: new Date().toLocaleString(),
+                      entryPrice: state.averageEntryPrice, exitPrice: botCurrentClose, volume: volToSell, pnl: pnl, pnlPct: pnlPct
+                  });
+
+                  if (pnl >= 0) {
+                      updatedBot.stats.winCount++; updatedBot.stats.grossProfit += pnl;
+                  } else {
+                      updatedBot.stats.lossCount++; updatedBot.stats.grossLoss += Math.abs(pnl);
+                  }
+
+                  updatedBot.logs.unshift({ time: new Date().toLocaleTimeString(), msg: `✅ AUTO SELL SUCCESS @ $${botCurrentClose.toFixed(4)}`, type: 'sell' });
+
+                  const newBotsArray = botsRef.current.map(b => b.id === updatedBot.id ? updatedBot : b);
+                  fetch('http://localhost:3001/api/bots', {
+                      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newBotsArray)
+                  }).catch(err => console.error("Fout bij opslaan bot state:", err));
+
+                  if (typeof fetchBalances === 'function') fetchBalances();
+                  if (typeof fetchOrders === 'function') setTimeout(() => fetchOrders(), 2000);
+
+                } else {
+                  logMsg = `❌ Auto-Sell Failed: ${isCoinbase ? JSON.stringify(order.error) : order.error}`;
+                  updatedBot.logs.unshift({ time: new Date().toLocaleTimeString(), msg: logMsg, type: 'error' });
                   state.phase = 'WAITING';
                 }
             } catch (err) {
-                updatedBot.logs.push({ time: new Date().toLocaleTimeString(), msg: `❌ Sell Error: ${err.message}`, type: 'error' });
+                logMsg = `❌ Pre-Sell Error: ${err.message}`;
+                updatedBot.logs.unshift({ time: new Date().toLocaleTimeString(), msg: logMsg, type: 'error' });
                 state.phase = 'WAITING';
             }
-            state.isProcessing = false; // LOCK UIT
+            state.isProcessing = false;
           }
 
           // Update logs if message changed
@@ -464,73 +527,105 @@ if (logMsg !== updatedBot.lastLog) {
   };
   useEffect(() => { fetchOrdersRef.current = fetchOrders; });
 
+  const addToast = (title, message, type = 'info') => {
+      const id = Math.random().toString(36).substr(2, 9);
+      setToasts(prev => [...prev, { id, title, message, type }]);
+      
+      // Haalt hem na 5 seconden weer netjes weg
+      setTimeout(() => {
+          setToasts(prev => prev.filter(t => t.id !== id));
+      }, 5000);
+  };
+
   // ==========================================
   // 💰 FETCH BALANCES & EQUITY
   // ==========================================
-  const fetchBalances = async () => {
+// fazant.jsx - Regel 493
+const fetchBalances = async () => {
+    let rawBalancesArray = []; 
+    const now = Math.floor(Date.now() / 1000);
+
+    // --- 1. KRAKEN FETCH ---
     try {
-      const res = await fetch('http://localhost:3001/api/balance', { method: 'POST', headers: getApiHeaders(), body: JSON.stringify({}) });
-      const data = await res.json();
-      if (data.error) throw new Error(data.error.join ? data.error.join(', ') : data.error);
-      
-      const newBalances = { ...balances };
-      let cleanBalances = {};
-      Object.keys(data).forEach(k => { 
-          let cleanKey = k.replace('Z', '').replace('X', ''); 
-          if (k === 'ZUSD') cleanKey = 'USD'; 
-          if (k === 'XXBT') cleanKey = 'BTC'; 
-          newBalances[cleanKey] = parseFloat(data[k]); 
-          cleanBalances[cleanKey] = parseFloat(data[k]);
-      });
-      setBalances(newBalances); 
-      setIsLoggedIn(true);
+        const resK = await fetch('http://localhost:3001/api/balance', { method: 'POST', headers: getApiHeaders() });
+        const dataK = await resK.json();
+        
+        if (!dataK.error && typeof dataK === 'object') {
+            Object.keys(dataK).forEach(k => { 
+                const amount = parseFloat(dataK[k]);
+                if (amount > 0.00000001) { 
+                    let cleanKey = k.replace('Z', '').replace('X', ''); 
+                    if (k === 'ZUSD') cleanKey = 'USD'; 
+                    if (k === 'XXBT') cleanKey = 'BTC'; 
+                    rawBalancesArray.push({ currency: cleanKey, amount: amount, exchange: 'Kraken' });
+                }
+            });
+        }
+    } catch (e) { console.error("Kraken balance fail", e); }
 
-      let estTotal = cleanBalances['USD'] || 0;
-      const heldCryptos = Object.keys(cleanBalances).filter(k => k !== 'USD' && cleanBalances[k] > 0.00001);
-      
-      if (heldCryptos.length > 0) {
-          const pairQuery = heldCryptos.map(c => {
-              if (c === 'BTC') return 'XXBTZUSD';
-              if (c === 'ETH') return 'XETHZUSD';
-              return `${c}USD`;
-          }).join(',');
+    // --- 2. COINBASE FETCH ---
+    if (apiKeys.cbKey) {
+        try {
+            const cbData = await fetchCoinbaseBalances(); 
+            if (Array.isArray(cbData)) {
+                cbData.forEach(acc => {
+                    const amount = acc.amount;
+                    if (amount > 0.00000001) {
+                        const key = acc.currency === 'XBT' ? 'BTC' : acc.currency;
+                        rawBalancesArray.push({ currency: key, amount: amount, exchange: 'Coinbase' });
+                    }
+                });
+            }
+        } catch (e) { console.error("Coinbase balance fail", e); }
+    }
 
-          try {
-              const tickRes = await fetch('http://localhost:3001/api/ticker', { 
-                  method: 'POST', headers: getApiHeaders(), body: JSON.stringify({ pair: pairQuery }) 
-              });
-              const tickData = await tickRes.json();
-              if (tickData.result) {
-                  heldCryptos.forEach(c => {
-                      let krakKey = c === 'BTC' ? 'XXBTZUSD' : c === 'ETH' ? 'XETHZUSD' : `${c}USD`;
-                      let pairInfo = tickData.result[krakKey] || tickData.result[`X${c}ZUSD`] || tickData.result[`${c}ZUSD`];
-                      if (pairInfo && pairInfo.c) {
-                          estTotal += cleanBalances[c] * parseFloat(pairInfo.c[0]); 
-                      }
-                  });
-              }
-          } catch (e) { console.error("Error fetching live prices", e); }
-      }
+    setBalances(rawBalancesArray);
+    setIsLoggedIn(rawBalancesArray.length > 0);
 
-      const now = Math.floor(Date.now() / 1000);
-      setEquityCurve(prev => {
-          if (prev.length === 0) { 
-              const newCurve = [{ time: now, value: estTotal }]; 
-              localStorage.setItem('kraken_equity_curve', JSON.stringify(newCurve)); 
-              return newCurve; 
-          }
-          const last = prev[prev.length - 1];
-          if (now - last.time > 60 || Math.abs(last.value - estTotal) > 0.5) { 
-              const newCurve = [...prev, { time: now, value: estTotal }]; 
-              const trimmedCurve = newCurve.slice(-500); 
-              localStorage.setItem('kraken_equity_curve', JSON.stringify(trimmedCurve)); 
-              return trimmedCurve; 
-          }
-          return prev;
-      });
+    // --- 3. BEREKEN TOTALE USD WAARDE VOOR DE GRAFIEK (DE FIX!) ---
+    let totalUsdValueForChart = 0;
+    const cryptos = [...new Set(rawBalancesArray.filter(b => b.currency !== 'USD').map(b => b.currency))];
 
-      setTimeout(() => fetchOrders(), 1000); 
-    } catch (err) { setIsLoggedIn(false); }
+    try {
+        let prices = {};
+        if (cryptos.length > 0) {
+            // Gebruik de openbare Kraken API net als in PortfolioView (werkt altijd!)
+            const pairs = cryptos.map(c => `${c === 'BTC' ? 'XBT' : c}USD`).join(',');
+            const resP = await fetch(`https://api.kraken.com/0/public/Ticker?pair=${pairs}`);
+            const dataP = await resP.json();
+            if (!dataP.error) prices = dataP.result;
+        }
+
+        rawBalancesArray.forEach(b => {
+            if (b.currency === 'USD') {
+                totalUsdValueForChart += b.amount;
+            } else {
+                let searchCoin = b.currency === 'BTC' ? 'XBT' : b.currency;
+                let priceKey = Object.keys(prices).find(k => k.includes(searchCoin));
+                if (priceKey && prices[priceKey]) {
+                    totalUsdValueForChart += b.amount * parseFloat(prices[priceKey].c[0]);
+                }
+            }
+        });
+    } catch (e) { console.error("Kon live prijzen niet ophalen voor de grafiek", e); }
+
+    // --- 4. GRAFIEK UPDATE ---
+    if (totalUsdValueForChart > 0) {
+        setEquityCurve(currentCurve => {
+            const prevCurve = currentCurve.length > 0 ? currentCurve : (JSON.parse(localStorage.getItem('kraken_equity_curve')) || []);
+            const lastValue = prevCurve[prevCurve.length - 1]?.value || 0;
+            
+            if (Math.abs(totalUsdValueForChart - lastValue) > 0.1 || prevCurve.length === 0) {
+                const newCurve = [...prevCurve, { time: now, value: totalUsdValueForChart }];
+                const trimmedCurve = newCurve.slice(-500); 
+                localStorage.setItem('kraken_equity_curve', JSON.stringify(trimmedCurve));
+                return trimmedCurve;
+            }
+            return prevCurve;
+        });
+    }
+
+    setTimeout(() => fetchOrders(), 1000); 
   };
 
   const hasFetchedBalance = useRef(false);
@@ -577,7 +672,20 @@ if (logMsg !== updatedBot.lastLog) {
       if (orderType === 'Market') { setPriceInput(currentPrice.toString()); if (amountInput) setTotalInput((parseFloat(amountInput) * currentPrice).toFixed(2)); } 
       if (currentPrice > 0 && !priceInput) { setPriceInput(currentPrice.toFixed(4)); }
   }, [orderType, currentPrice]);
-  const handleSliderClick = (pct) => { const available = balances[activePair.quote] || 0; const spend = available * (pct / 100); const p = orderType === 'Market' ? currentPrice : parseFloat(priceInput) || currentPrice; setTotalInput(spend.toFixed(2)); if (p > 0) setAmountInput((spend / p).toFixed(6)); };
+  const handleSliderClick = (pct) => { 
+      // Haal de juiste balans op afhankelijk van of we kopen (Quote) of verkopen (Base)
+      const available = tradeSide === 'Buy' ? getBalance(activePair.quote) : getBalance(activePair.base); 
+      const spend = available * (pct / 100); 
+      const p = orderType === 'Market' ? currentPrice : parseFloat(priceInput) || currentPrice; 
+      
+      if (tradeSide === 'Buy') {
+          setTotalInput(spend.toFixed(2)); 
+          if (p > 0) setAmountInput((spend / p).toFixed(6)); 
+      } else {
+          setAmountInput(spend.toFixed(6));
+          if (p > 0) setTotalInput((spend * p).toFixed(2));
+      }
+  };
 
   const executeOrder = async (side) => {
     const amt = parseFloat(amountInput); const p = orderType === 'Market' ? currentPrice : parseFloat(priceInput);
@@ -591,11 +699,17 @@ if (logMsg !== updatedBot.lastLog) {
       const res = await fetch('http://localhost:3001/api/order', { method: 'POST', headers: getApiHeaders(), body: JSON.stringify(payload) });
       const data = await res.json();
       if (data.error) throw new Error(data.error.join ? data.error.join(', ') : data.error);
+      addToast(
+          'Order Geplaatst! 🚀', 
+          `Succesvol ${side} order ingelegd op ${activePair.display}`, 
+          'success'
+      );
 
       alert(`Order successfully placed! TXID: ${data.txid?.join(', ')}`);
       setTimeout(() => { fetchBalances(); fetchOrders(); }, 1500); 
       setAmountInput(''); setTotalInput(''); setUseSL(false); setUseTP(false);
     } catch (err) { alert('Error placing order:\n' + err.message); }
+     
   };
 
   const cancelOrder = async (txid) => {
@@ -661,6 +775,22 @@ if (logMsg !== updatedBot.lastLog) {
     ));
   };
 
+  // Helper om de multi-exchange balans netjes op te tellen
+  const getBalance = (currency) => {
+      if (!Array.isArray(balances)) return 0;
+      let searchCurrency = currency.replace('XBT', 'BTC').replace('ZUSD', 'USD').replace('ZEUR', 'EUR');
+      return balances
+          .filter(b => b.currency === searchCurrency)
+          .reduce((sum, b) => sum + b.amount, 0); // Telt Kraken en Coinbase bij elkaar op!
+  };
+
+  // Helper voor het juiste valuta-symbool (€ of $)
+  const getCurrencySymbol = (quote) => {
+      if (quote.includes('EUR')) return '€';
+      if (quote.includes('USD')) return '$';
+      return ''; // Laat leeg voor crypto/crypto pairs (bijv. ETH/BTC)
+  };
+
   return (
     <div className="flex h-screen bg-[#09090b] text-zinc-300 font-sans text-sm overflow-hidden">
       {/* ⚙️ API Settings Modal */}
@@ -680,6 +810,19 @@ if (logMsg !== updatedBot.lastLog) {
                   <label className="text-[10px] uppercase text-zinc-500 font-bold">Kraken API Secret</label>
                   <input type="password" value={apiKeys.krakenSecret} onChange={e => setApiKeys({...apiKeys, krakenSecret: e.target.value})} className="w-full bg-[#050505] border border-zinc-800 rounded p-2 text-sm text-white outline-none focus:border-blue-500" placeholder="Leave blank for backend default" />
                 </div>
+
+                <div className="h-px bg-zinc-800/50 my-2"></div>
+                <div className="space-y-1">
+                  <label className="text-[10px] uppercase text-zinc-500 font-bold flex items-center gap-2">
+                    <div className="w-2 h-2 bg-blue-500 rounded-full"></div> Coinbase API Key
+                  </label>
+                  <input type="text" value={apiKeys.cbKey} onChange={e => setApiKeys({...apiKeys, cbKey: e.target.value})} className="w-full bg-[#050505] border border-zinc-800 rounded p-2 text-sm text-white outline-none focus:border-blue-500" placeholder="Coinbase Advanced Key" />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] uppercase text-zinc-500 font-bold">Coinbase API Secret</label>
+                  <textarea value={apiKeys.cbSecret} onChange={e => setApiKeys({...apiKeys, cbSecret: e.target.value})} className="w-full bg-[#050505] border border-zinc-800 rounded p-2 text-sm text-white outline-none focus:border-blue-500 h-24 font-mono text-[8px]" placeholder="Plak hier de VOLLEDIGE Private Key (inclusief BEGIN/END regels)"></textarea>
+                </div>
+
                 <div className="h-px bg-zinc-800/50 my-2"></div>
                 <div className="space-y-1">
                   <label className="text-[10px] uppercase text-zinc-500 font-bold">Gemini API Key (Optional for AI)</label>
@@ -694,7 +837,7 @@ if (logMsg !== updatedBot.lastLog) {
       {popoutCharts.map((pop, i) => (
         <PopoutWindow key={`popout-${i}`} title={`Trading - ${pop.pair?.display}`} externalWindow={pop.win} onClose={() => closePopout(i)}>
           <div className="flex-1 flex flex-col h-screen w-full overflow-hidden bg-[#09090b]">
-             <TradingChart pair={pop.pair} timeframe={timeframe} showVolume={showVolume} signals={signals} positions={tradeHistory} scriptLoaded={scriptLoaded} isActive={false} isDrawingMode={isDrawingMode} externalWindow={pop.win} />
+             <TradingChart bots={bots} pair={pop.pair} timeframe={timeframe} showVolume={showVolume} signals={signals} positions={tradeHistory} scriptLoaded={scriptLoaded} isActive={false} isDrawingMode={isDrawingMode} externalWindow={pop.win} />
           </div>
         </PopoutWindow>
       ))}
@@ -749,11 +892,23 @@ if (logMsg !== updatedBot.lastLog) {
             )}
           </div>
           <div className="h-8 w-px bg-zinc-800 mx-4"></div>
-          <div className="flex items-center space-x-6 text-[11px] font-mono">
-            <div className="flex flex-col"><span className="text-emerald-500 font-bold text-sm">${formatPrice(currentPrice)}</span><span className="text-zinc-500 uppercase tracking-tighter">Live Price</span></div>
-            <div className="flex flex-col"><span className="text-zinc-200 font-bold">${(balances[activePair.quote] || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</span><span className="text-zinc-500 uppercase tracking-tighter">{activePair.quote} Balance</span></div>
-            <div className="flex flex-col"><span className="text-zinc-200 font-bold">{(balances[activePair.base] || 0).toFixed(4)}</span><span className="text-zinc-500 uppercase tracking-tighter">{activePair.base.replace('XBT', 'BTC')} Balance</span></div>
-          </div>
+            <div className="flex items-center space-x-6 text-[11px] font-mono">
+              <div className="flex flex-col">
+                <span className="text-emerald-500 font-bold text-sm">{getCurrencySymbol(activePair.quote)}{formatPrice(currentPrice)}</span>
+                <span className="text-zinc-500 uppercase tracking-tighter">Live Price</span>
+              </div>
+              <div className="flex flex-col">
+                <span className="text-zinc-200 font-bold">{getCurrencySymbol(activePair.quote)}{getBalance(activePair.quote).toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                <span className="text-zinc-500 uppercase tracking-tighter">{activePair.quote} Balance</span>
+              </div>
+              <div className="flex flex-col">
+                <span className="text-zinc-200 font-bold">{getBalance(activePair.base).toFixed(4)}</span>
+                <span className="text-zinc-500 uppercase tracking-tighter">{activePair.base.replace('XBT', 'BTC')} Balance</span>
+              </div>
+              <div className="h-[50px]">
+                  <FearAndGreedGauge />
+              </div>
+            </div>
           <div className="flex-1"></div>
           <div className="flex items-center pl-6 border-l border-zinc-800 ml-4">
             {isLoggedIn ? (
@@ -780,7 +935,7 @@ if (logMsg !== updatedBot.lastLog) {
         {currentView === 'screener' && <ScreenerView onDeployBot={handleDeployFromScreener} />}
         {currentView === 'ai' && <AiAdvisorView activePair={activePair} aiMessages={aiMessages} setAiMessages={setAiMessages} timeframe={timeframe} />}
         {currentView === 'portfolio' && <PortfolioView balances={balances} scriptLoaded={scriptLoaded} equityCurve={equityCurve} onRefresh={fetchBalances} tradeHistory={tradeHistory} />}
-        {currentView === 'bots' && <BotManagerView bots={bots} setBots={setBots} availablePairs={availablePairs} activePair={activePair} />}
+        {currentView === 'bots' && <BotManagerView bots={bots} setBots={setBots} availablePairs={availablePairs} activePair={activePair} setActivePair={handleSetActivePair} />}
         {currentView === 'whales' && <WhaleHubView activePair={activePair} />}
 
         {currentView === 'charts' && (
@@ -813,9 +968,9 @@ if (logMsg !== updatedBot.lastLog) {
 
               <div className={`flex-1 flex flex-col bg-[#09090b] ${layout === 4 ? 'grid grid-cols-2 grid-rows-2' : ''}`}>
                 {layout === 1 ? (
-                  <TradingChart pair={gridPairs[activeIndex]} timeframe={timeframe} showVolume={showVolume} signals={signals} positions={tradeHistory} scriptLoaded={scriptLoaded} isActive={true} isDrawingMode={isDrawingMode} onPopout={() => openPopout({ ...gridPairs[activeIndex] })} />
+                  <TradingChart bots={bots} pair={gridPairs[activeIndex]} timeframe={timeframe} showVolume={showVolume} signals={signals} positions={tradeHistory} scriptLoaded={scriptLoaded} isActive={true} isDrawingMode={isDrawingMode} onPopout={() => openPopout({ ...gridPairs[activeIndex] })} />
                 ) : (
-                  gridPairs.slice(0, 4).map((p, i) => (<TradingChart key={`chart-${i}-${p?.id}`} pair={p} timeframe={timeframe} showVolume={showVolume} signals={signals} positions={tradeHistory} scriptLoaded={scriptLoaded} isActive={activeIndex === i} isDrawingMode={isDrawingMode} onClick={() => setActiveIndex(i)} onPopout={() => openPopout({ ...p })} />))
+                  gridPairs.slice(0, 4).map((p, i) => (<TradingChart key={`chart-${i}-${p?.id}`} bots={bots} pair={p} timeframe={timeframe} showVolume={showVolume} signals={signals} positions={tradeHistory} scriptLoaded={scriptLoaded} isActive={activeIndex === i} isDrawingMode={isDrawingMode} onClick={() => setActiveIndex(i)} onPopout={() => openPopout({ ...p })} />))
                 )}
               </div>
 
@@ -886,7 +1041,7 @@ if (logMsg !== updatedBot.lastLog) {
                     <div className="flex bg-[#09090b] p-1 rounded-lg border border-zinc-800"><button onClick={() => setTradeSide('Buy')} className={`flex-1 py-1.5 text-xs font-bold rounded transition ${tradeSide === 'Buy' ? 'bg-emerald-600/20 text-emerald-500' : 'text-zinc-500'}`}>BUY</button><button onClick={() => setTradeSide('Sell')} className={`flex-1 py-1.5 text-xs font-bold rounded transition ${tradeSide === 'Sell' ? 'bg-rose-600/20 text-rose-500' : 'text-zinc-500'}`}>SELL</button></div>
                     <div className="flex bg-[#09090b] p-1 rounded-lg border border-zinc-800">{['Limit', 'Market'].map(type => (<button key={type} onClick={() => setOrderType(type)} className={`flex-1 py-1 text-[10px] font-bold rounded uppercase transition ${orderType === type ? 'bg-zinc-800 text-white shadow-sm' : 'text-zinc-500'}`}>{type}</button>))}</div>
                     <div className="space-y-4 pt-2">
-                      <div className="flex justify-between text-[10px] uppercase font-bold text-zinc-500"><span>Balance</span><span className="text-zinc-200">{tradeSide === 'Buy' ? (balances[activePair.quote] || 0).toLocaleString('en-US', {minimumFractionDigits: 2}) : (balances[activePair.base] || 0).toFixed(6)} {tradeSide === 'Buy' ? activePair.quote : activePair.base.replace('XBT', 'BTC')}</span></div>
+                      <div className="flex justify-between text-[10px] uppercase font-bold text-zinc-500"><span>Balance</span><span className="text-zinc-200">{tradeSide === 'Buy' ? getBalance(activePair.quote).toLocaleString('en-US', {minimumFractionDigits: 2}) : getBalance(activePair.base).toFixed(6)} {tradeSide === 'Buy' ? activePair.quote : activePair.base.replace('XBT', 'BTC')}</span></div>
                       <div className="bg-[#09090b] border border-zinc-800 rounded-lg p-2 focus-within:border-blue-500"><div className="flex justify-between text-[10px] text-zinc-500 uppercase mb-1"><span>Price</span><span>{activePair.quote}</span></div><input type="number" disabled={orderType === 'Market'} value={orderType === 'Market' ? '' : priceInput} onChange={(e) => onPriceChange(e.target.value)} placeholder={orderType === 'Market' ? 'MARKET' : '0.00'} className="w-full bg-transparent text-zinc-100 font-mono outline-none text-sm" /></div>
                       <div className="bg-[#09090b] border border-zinc-800 rounded-lg p-2 focus-within:border-blue-500"><div className="flex justify-between text-[10px] text-zinc-500 uppercase mb-1"><span>Amount</span><span>{activePair.base.replace('XBT', 'BTC')}</span></div><input type="number" value={amountInput} onChange={(e) => onAmountChange(e.target.value)} placeholder="0.00" className="w-full bg-transparent text-zinc-100 font-mono outline-none text-sm" /></div>
                       <div className="flex justify-between gap-1">{[25, 50, 75, 100].map(pct => (<button key={pct} onClick={() => handleSliderClick(pct)} className="flex-1 py-1 bg-zinc-800 hover:bg-zinc-700 text-[9px] rounded font-bold">{pct}%</button>))}</div>
@@ -909,6 +1064,43 @@ if (logMsg !== updatedBot.lastLog) {
             </div>
           </div>
         )}
+
+        {/* 🔔 TOAST NOTIFICATIES */}
+        <div className="fixed bottom-16 right-6 z-[9999] flex flex-col gap-3 pointer-events-none">
+          <style>{`
+            @keyframes slide-in-right {
+              from { transform: translateX(120%); opacity: 0; }
+              to { transform: translateX(0); opacity: 1; }
+            }
+            .animate-toast { animation: slide-in-right 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+          `}</style>
+
+          {toasts.map(toast => {
+             const isSuccess = toast.type === 'buy' || toast.type === 'success';
+             const isError = toast.type === 'loss' || toast.type === 'error';
+             
+             const iconColor = isSuccess ? 'text-emerald-400' : isError ? 'text-rose-400' : 'text-blue-400';
+             const borderColor = isSuccess ? 'border-emerald-500/30' : isError ? 'border-rose-500/30' : 'border-blue-500/30';
+             const bgColor = isSuccess ? 'bg-emerald-900/20' : isError ? 'bg-rose-900/20' : 'bg-blue-900/20';
+
+             return (
+               <div key={toast.id} className={`flex items-start p-4 w-80 rounded-2xl border backdrop-blur-xl shadow-2xl pointer-events-auto animate-toast bg-[#0b0e11]/90 ${bgColor} ${borderColor}`}>
+                 <div className={`mt-0.5 mr-3 ${iconColor}`}>
+                   {isSuccess ? <Target size={18} /> : isError ? <AlertTriangle size={18} /> : <Zap size={18} />}
+                 </div>
+                 <div className="flex-1 flex flex-col">
+                   <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">{toast.title}</span>
+                   <span className="text-sm text-zinc-100 font-medium mt-0.5 leading-snug">{toast.message}</span>
+                 </div>
+                 <button onClick={() => setToasts(prev => prev.filter(t => t.id !== toast.id))} className="text-zinc-500 hover:text-white transition ml-3">
+                   <X size={16} />
+                 </button>
+               </div>
+             );
+          })}
+        </div>
+
+        <LiveTicker />
       </div>
     </div>
   );

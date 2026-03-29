@@ -3,6 +3,7 @@ const cors = require('cors');
 const axios = require('axios');
 const crypto = require('crypto');
 const qs = require('qs');
+const jwt = require('jsonwebtoken'); // Vergeet deze import niet bovenaan!
 
 const app = express();
 
@@ -30,6 +31,144 @@ const getMessageSignature = (path, request, secret, nonce) => {
     const hash_digest = hash.update(nonce + message).digest('binary');
     return hmac.update(path + hash_digest, 'binary').digest('base64');
 };
+
+// ==========================================
+// 🔵 COINBASE ADVANCED TRADE API
+// ==========================================
+
+app.post('/api/coinbase/balance', async (req, res) => {
+    try {
+        const cbKey = req.headers['x-cb-api-key']; // format: organizations/{org_id}/apiKeys/{key_id}
+        const rawSecret = req.headers['x-cb-api-secret'];
+
+        if (!cbKey || !rawSecret) return res.json([]);
+
+        // 1. Zorg dat we een perfect geformatteerde PEM-key hebben
+        const cleanSecret = rawSecret
+            .replace(/-----BEGIN EC PRIVATE KEY-----/gi, '')
+            .replace(/-----END EC PRIVATE KEY-----/gi, '')
+            .replace(/\\n/g, '') // Mocht de browser letterlijke \n tekens meesturen
+            .replace(/\s+/g, ''); 
+
+        const matched = cleanSecret.match(/.{1,64}/g);
+        if (!matched) throw new Error("Ongeldige Base64 data");
+        const formattedSecret = `-----BEGIN EC PRIVATE KEY-----\n${matched.join('\n')}\n-----END EC PRIVATE KEY-----\n`;
+
+        // 2. Exacte parameters uit de Coinbase CDP documentatie
+        const request_method = 'GET';
+        const url = 'api.coinbase.com';
+        const request_path = '/api/v3/brokerage/accounts';
+        const uri = `${request_method} ${url}${request_path}`;
+        const timestamp = Math.floor(Date.now() / 1000);
+
+        // 3. De nieuwe CDP Payload
+        const payload = {
+            iss: 'cdp', // Aangepast naar de documentatie
+            nbf: timestamp,
+            exp: timestamp + 120,
+            sub: cbKey,
+            uri: uri,   // Dit veld is nu verplicht!
+        };
+
+        const token = jwt.sign(payload, formattedSecret, {
+            algorithm: 'ES256',
+            header: {
+                kid: cbKey,
+                nonce: crypto.randomBytes(16).toString('hex')
+            }
+        });
+
+        // 4. De daadwerkelijke API Call
+        const response = await axios.get(`https://${url}${request_path}`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+
+        if (response.data && response.data.accounts) {
+            const activeAccounts = response.data.accounts
+                .filter(a => parseFloat(a.available_balance.value) > 0)
+                .map(a => ({
+                    currency: a.currency,
+                    amount: parseFloat(a.available_balance.value),
+                    exchange: 'Coinbase'
+                }));
+            res.json(activeAccounts);
+        } else {
+            res.json([]);
+        }
+
+    } catch (err) {
+        console.error("🔥 Coinbase CDP Error:", err.response ? JSON.stringify(err.response.data) : err.message);
+        res.json([]);
+    }
+});
+
+// --- COINBASE ORDER ROUTE ---
+app.post('/api/coinbase/order', async (req, res) => {
+    try {
+        const cbKey = req.headers['x-cb-api-key'];
+        const rawSecret = req.headers['x-cb-api-secret'];
+        const { pair, type, volume, quoteVolume } = req.body; 
+
+        if (!cbKey || !rawSecret) return res.status(401).json({ error: "Geen Coinbase keys gevonden." });
+
+        // 1. PEM Reparatie
+        const cleanSecret = rawSecret.replace(/-----BEGIN EC PRIVATE KEY-----/gi, '').replace(/-----END EC PRIVATE KEY-----/gi, '').replace(/\\n/g, '').replace(/\s+/g, '');
+        const matched = cleanSecret.match(/.{1,64}/g);
+        const formattedSecret = `-----BEGIN EC PRIVATE KEY-----\n${matched.join('\n')}\n-----END EC PRIVATE KEY-----\n`;
+
+        // 2. JWT Genereren
+        const request_method = 'POST';
+        const url = 'api.coinbase.com';
+        const request_path = '/api/v3/brokerage/orders';
+        const uri = `${request_method} ${url}${request_path}`;
+        const timestamp = Math.floor(Date.now() / 1000);
+
+        const token = jwt.sign({ iss: 'cdp', nbf: timestamp, exp: timestamp + 120, sub: cbKey, uri }, formattedSecret, {
+            algorithm: 'ES256', header: { kid: cbKey, nonce: crypto.randomBytes(16).toString('hex') }
+        });
+
+        // 3. Coinbase Smart Order Configuratie
+        const client_order_id = crypto.randomBytes(16).toString('hex');
+        let order_configuration = {};
+
+        if (req.body.ordertype === 'limit') {
+            // Smart Limit Order (Maker)
+            order_configuration = { 
+                limit_limit_gtc: { 
+                    base_size: volume.toString(),
+                    limit_price: req.body.price.toString(),
+                    post_only: true // 🔥 DIT IS DE MAGIE: Forceert de lage 'Maker' fee!
+                } 
+            };
+        } else if (type.toUpperCase() === 'BUY') {
+            // Market Buy
+            order_configuration = { market_market_ioc: { quote_size: quoteVolume.toString() } };
+        } else {
+            // Market Sell
+            order_configuration = { market_market_ioc: { base_size: volume.toString() } };
+        }
+
+        // 4. Stuur naar Coinbase
+        const response = await axios.post(`https://${url}${request_path}`, {
+            client_order_id,
+            product_id: pair,
+            side: type.toUpperCase(),
+            order_configuration
+        }, {
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
+        });
+
+        if (response.data.success) {
+            res.json({ success: true, order_id: response.data.order_id });
+        } else {
+            res.status(400).json({ error: response.data.error_response?.message || "Coinbase weigerde de order." });
+        }
+
+    } catch (err) {
+        console.error("🔥 Coinbase Order Error:", err.response ? JSON.stringify(err.response.data) : err.message);
+        res.status(500).json({ error: err.response?.data?.message || err.message });
+    }
+});
 
 // ==========================================
 // 🛡️ REQUEST QUEUE (Wachtrij)

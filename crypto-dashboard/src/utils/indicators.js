@@ -66,26 +66,51 @@ export const calculateBB = (data, period, stdDevMultiplier) => {
   return { upper, middle, lower };
 };
 
-export const calculateRSI = (data, period) => {
-  // ... (plak hier de rest van je originele calculateRSI code)
-  const rsiData = [];
-  if (data.length < period) return rsiData;
-  let avgGain = 0, avgLoss = 0;
-  for (let i = 1; i <= period; i++) {
-    const change = data[i].close - data[i - 1].close;
-    if (change > 0) avgGain += change; else avgLoss -= change;
-  }
-  avgGain /= period; avgLoss /= period;
-  rsiData.push({ time: data[period].time, value: avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss)) });
-  for (let i = period + 1; i < data.length; i++) {
-    const change = data[i].close - data[i - 1].close;
-    const gain = change > 0 ? change : 0; const loss = change < 0 ? -change : 0;
-    avgGain = (avgGain * (period - 1) + gain) / period;
-    avgLoss = (avgLoss * (period - 1) + loss) / period;
-    let rs = avgGain / avgLoss;
-    rsiData.push({ time: data[i].time, value: avgLoss === 0 ? 100 : 100 - (100 / (1 + rs)) });
-  }
-  return rsiData;
+export const calculateRSI = (data, period = 14) => {
+    let rsiArray = [];
+    
+    // We hebben minstens 'period' + 1 kaarsen nodig
+    if (data.length <= period) {
+        return data.map(d => ({ time: d.time, value: 50 })); // Default 50 bij te weinig data
+    }
+
+    let gains = 0;
+    let losses = 0;
+
+    // Stap 1: Bereken de EERSTE Average Gain en Average Loss met een gewone SMA (Simple Average)
+    for (let i = 1; i <= period; i++) {
+        let change = data[i].close - data[i - 1].close;
+        if (change > 0) gains += change;
+        else losses -= change; // min-teken om verlies positief te maken
+    }
+
+    let avgGain = gains / period;
+    let avgLoss = losses / period;
+
+    // Vul de eerste 'period' kaarsen met lege/default data om de array synchroon te houden
+    for (let i = 0; i <= period; i++) {
+        let rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+        let rsi = avgLoss === 0 ? 100 : 100 - (100 / (1 + rs));
+        rsiArray.push({ time: data[i].time, value: i === period ? rsi : 50 });
+    }
+
+    // Stap 2: Bereken de rest met de officiële "Wilder's Smoothing Method" (RMA/SMMA)
+    for (let i = period + 1; i < data.length; i++) {
+        let change = data[i].close - data[i - 1].close;
+        let currentGain = change > 0 ? change : 0;
+        let currentLoss = change < 0 ? Math.abs(change) : 0;
+
+        // Wilder's Smoothing: (Vorige Avg * (period - 1) + Huidige) / period
+        avgGain = ((avgGain * (period - 1)) + currentGain) / period;
+        avgLoss = ((avgLoss * (period - 1)) + currentLoss) / period;
+
+        let rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+        let rsi = avgLoss === 0 ? 100 : 100 - (100 / (1 + rs));
+
+        rsiArray.push({ time: data[i].time, value: rsi });
+    }
+
+    return rsiArray;
 };
 
 // ... (laat je bestaande SMA, EMA, MACD, BB, RSI code gewoon staan) ...
