@@ -46,12 +46,12 @@ export default function TradingDashboard() {
 
   const [layout, setLayout] = useState(1);
   const [popoutCharts, setPopoutCharts] = useState([]);
-  const [showVolume, setShowVolume] = useState(true);
+  const [showVolume, setShowVolume] = useState(false);
   const [timeframe, setTimeframe] = useState('1m');
   
   const [signals, setSignals] = useState({
-    sma1: { active: true, period: 50, color: '#2962FF' }, sma2: { active: false, period: 200, color: '#FF6D00' },
-    bb: { active: false, period: 20, stdDev: 2, color: '#9c27b0' }, rsi: { active: false, period: 14, color: '#e91e63' },
+    sma1: { active: false, period: 50, color: '#2962FF' }, sma2: { active: false, period: 200, color: '#FF6D00' },
+    bb: { active: false, period: 20, stdDev: 2, color: '#9c27b0' }, rsi: { active: true, period: 14, color: '#e91e63' },
     macd: { active: false, color: '#2962FF' }
   });
 
