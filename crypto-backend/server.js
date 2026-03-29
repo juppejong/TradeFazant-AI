@@ -102,6 +102,65 @@ app.post('/api/coinbase/balance', async (req, res) => {
     }
 });
 
+// --- COINBASE ORDER ROUTE ---
+app.post('/api/coinbase/order', async (req, res) => {
+    try {
+        const cbKey = req.headers['x-cb-api-key'];
+        const rawSecret = req.headers['x-cb-api-secret'];
+        const { pair, type, volume, quoteVolume } = req.body; 
+
+        if (!cbKey || !rawSecret) return res.status(401).json({ error: "Geen Coinbase keys gevonden." });
+
+        // 1. PEM Reparatie
+        const cleanSecret = rawSecret.replace(/-----BEGIN EC PRIVATE KEY-----/gi, '').replace(/-----END EC PRIVATE KEY-----/gi, '').replace(/\\n/g, '').replace(/\s+/g, '');
+        const matched = cleanSecret.match(/.{1,64}/g);
+        const formattedSecret = `-----BEGIN EC PRIVATE KEY-----\n${matched.join('\n')}\n-----END EC PRIVATE KEY-----\n`;
+
+        // 2. JWT Genereren
+        const request_method = 'POST';
+        const url = 'api.coinbase.com';
+        const request_path = '/api/v3/brokerage/orders';
+        const uri = `${request_method} ${url}${request_path}`;
+        const timestamp = Math.floor(Date.now() / 1000);
+
+        const token = jwt.sign({ iss: 'cdp', nbf: timestamp, exp: timestamp + 120, sub: cbKey, uri }, formattedSecret, {
+            algorithm: 'ES256', header: { kid: cbKey, nonce: crypto.randomBytes(16).toString('hex') }
+        });
+
+        // 3. Coinbase Market Order Configuratie
+        const client_order_id = crypto.randomBytes(16).toString('hex');
+        let order_configuration = {};
+
+        if (type.toUpperCase() === 'BUY') {
+            // Market Buy vereist quote_size (bedrag in USD/USDC)
+            order_configuration = { market_market_ioc: { quote_size: quoteVolume.toString() } };
+        } else {
+            // Market Sell vereist base_size (bedrag in Crypto)
+            order_configuration = { market_market_ioc: { base_size: volume.toString() } };
+        }
+
+        // 4. Stuur naar Coinbase
+        const response = await axios.post(`https://${url}${request_path}`, {
+            client_order_id,
+            product_id: pair,
+            side: type.toUpperCase(),
+            order_configuration
+        }, {
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
+        });
+
+        if (response.data.success) {
+            res.json({ success: true, order_id: response.data.order_id });
+        } else {
+            res.status(400).json({ error: response.data.error_response?.message || "Coinbase weigerde de order." });
+        }
+
+    } catch (err) {
+        console.error("🔥 Coinbase Order Error:", err.response ? JSON.stringify(err.response.data) : err.message);
+        res.status(500).json({ error: err.response?.data?.message || err.message });
+    }
+});
+
 // ==========================================
 // 🛡️ REQUEST QUEUE (Wachtrij)
 // ==========================================

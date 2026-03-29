@@ -191,45 +191,44 @@ export default function TradingDashboard() {
 
 
           // 4. Trailing Intercept & Logic (Opgelost!)
-// 4. Trailing Intercept & Logic (Waterdicht)
+          // 4. Trailing Intercept & Logic (MOET VOOR DE EXECUTIE STAAN)
           if (cfg.useTrailing) {
-              // A. Intercept de RSI signalen als de bot aan het wachten is
               if (state.phase === 'WAITING') {
                   if (buySignal) {
-                      buySignal = false; // Blokkeer de directe aankoop
+                      // KAPERING: Reset het signaal zodat stap 6 niet direct koopt
+                      buySignal = false; 
                       state.phase = 'TRAILING_BUY';
                       state.extremePrice = botCurrentClose;
-                      updatedBot.state = { ...updatedBot.state, phase: 'TRAILING_BUY', extremePrice: botCurrentClose };
                       logMsg = `⏳ RSI hit! Start Trailing Buy vanaf $${botCurrentClose.toFixed(4)}`;
                   } else if (sellSignal) {
-                      sellSignal = false; // Blokkeer de directe verkoop
+                      // KAPERING: Reset het signaal zodat stap 6 niet direct verkoopt
+                      sellSignal = false; 
                       state.phase = 'TRAILING_SELL';
                       state.extremePrice = botCurrentClose;
                       logMsg = `⏳ Target hit! Start Trailing Sell vanaf $${botCurrentClose.toFixed(4)}`;
                   }
               } 
-              // B. Voer de trailing logica uit als hij al aan het zoeken is
               else if (state.phase === 'TRAILING_BUY') {
-                  buySignal = false; // 🛑 FORCEER FALSE: Pas kopen als reversal geraakt is!
+                  buySignal = false; // Altijd false houden zolang we in de fase zitten
                   
                   if (botCurrentClose < state.extremePrice) {
                       state.extremePrice = botCurrentClose;
-                      logMsg = `👇 Nieuwe bodem gevonden: $${botCurrentClose.toFixed(4)}`;
+                      logMsg = `👇 Lagere bodem: $${botCurrentClose.toFixed(4)}`;
                   } else if (botCurrentClose >= state.extremePrice * (1 + cfg.trailingPct / 100)) {
-                      buySignal = true; // Trailing percentage geraakt, nu mag hij écht kopen!
-                      state.phase = 'WAITING'; // Reset de fase
+                      buySignal = true; // NU pas mag er echt gekocht worden
+                      state.phase = 'WAITING';
                       logMsg = `🟢 Trailing Reversal! Kopen op $${botCurrentClose.toFixed(4)}`;
                   } else {
                       logMsg = `📉 Trailing Buy... Wacht op ${cfg.trailingPct}% stijging vanaf $${state.extremePrice.toFixed(4)}`;
                   }
               } else if (state.phase === 'TRAILING_SELL') {
-                  sellSignal = false; // 🛑 FORCEER FALSE: Pas verkopen als reversal geraakt is!
+                  sellSignal = false; // Altijd false houden zolang we in de fase zitten
                   
                   if (botCurrentClose > state.extremePrice) {
                       state.extremePrice = botCurrentClose;
-                      logMsg = `👆 Nieuwe piek gevonden: $${botCurrentClose.toFixed(4)}`;
+                      logMsg = `👆 Hogere piek: $${botCurrentClose.toFixed(4)}`;
                   } else if (botCurrentClose <= state.extremePrice * (1 - cfg.trailingPct / 100)) {
-                      sellSignal = true; // Trailing percentage geraakt, nu mag hij écht verkopen!
+                      sellSignal = true; // NU pas mag er echt verkocht worden
                       state.phase = 'WAITING';
                       logMsg = `🔴 Trailing Reversal! Verkopen op $${botCurrentClose.toFixed(4)}`;
                   } else {
@@ -258,56 +257,178 @@ export default function TradingDashboard() {
             } catch (e) { buySignal = false; sellSignal = false; }
           }
 
-          // 6. Execution (Nu met veilige marge en zichtbare Error logs!)
+// 6. Execution (Nu met Coinbase USDC Routing!)
           if (buySignal && state.totalVolume === 0) {
-            state.isProcessing = true; // LOCK AAN
+            state.isProcessing = true; 
             
-            // 2% veiligheidsmarge net als bij manual trading, om Kraken fees en slippage op te vangen
-            const safeQuoteBalance = (currentBalances[updatedBot.pair.quote] || 0) * 0.98;
-            
-            const vol = cfg.sizingType === 'percent' 
-              ? (safeQuoteBalance * (cfg.tradePercent / 100)) / botCurrentClose 
-              : cfg.tradeAmount;
+            try {
+                const isCoinbase = updatedBot.config?.exchange === 'Coinbase';
+                const displayParts = updatedBot.pair.display.split('/');
+                const cleanBase = displayParts[0] === 'XBT' ? 'BTC' : displayParts[0];
+                const cleanQuote = displayParts[1] || 'USD';
+                
+                // 🪄 DE MAGISCHE TRUC VOOR DE AUTO-BOT
+                let orderPair = updatedBot.pair.altname;
+                if (isCoinbase) {
+                    const targetQuote = cleanQuote === 'USD' ? 'USDC' : cleanQuote;
+                    orderPair = `${cleanBase}-${targetQuote}`;
+                }
 
-            const res = await fetch('http://localhost:3001/api/order', {
-              method: 'POST',
-              headers: getApiHeaders(),
-              body: JSON.stringify({ pair: updatedBot.pair.altname, type: 'buy', ordertype: 'market', volume: vol.toFixed(8) })
-            });
-            const order = await res.json();
-            
-            if (!order.error) {
-              state.totalVolume = vol;
-              state.averageEntryPrice = botCurrentClose;
-              state.lastAction = 'BUY';
-              state.lastTradeTime = nowMs;
-              state.phase = 'WAITING'; // Reset de trailing fase
-              playTradeSound('buy')
-              
-              updatedBot.logs.push({ 
-                  time: new Date().toLocaleTimeString(), 
-                  msg: `✅ BUY SUCCESSFUL @ $${botCurrentClose.toFixed(4)}`, 
-                  type: 'buy' 
-              });
+                let quoteBalance = 0;
+                if (isCoinbase) {
+                    const resBal = await fetch('http://localhost:3001/api/coinbase/balance', { method: 'POST', headers: getApiHeaders() });
+                    const bData = await resBal.json();
+                    const acc = bData.find(a => a.currency === cleanQuote);
+                    quoteBalance = acc ? acc.amount : 0;
+                    if (cleanQuote === 'USD') {
+                        const usdcAcc = bData.find(a => a.currency === 'USDC');
+                        if (usdcAcc) quoteBalance += usdcAcc.amount;
+                    }
+                } else {
+                    const resBal = await fetch('http://localhost:3001/api/balance', { method: 'POST', headers: getApiHeaders() });
+                    const bData = await resBal.json();
+                    const quoteKey = cleanQuote === 'USD' ? 'ZUSD' : (cleanQuote === 'EUR' ? 'ZEUR' : cleanQuote);
+                    quoteBalance = parseFloat(bData[quoteKey] || bData[cleanQuote] || 0);
+                }
 
-              // 🔥 FORCEER DIRECTE OPSLAG NAAR SERVER (De Fix!)
-              const newBotsArray = botsRef.current.map(b => b.id === updatedBot.id ? updatedBot : b);
-              fetch('http://localhost:3001/api/bots', {
+                const safeQuoteBalance = quoteBalance * 0.98;
+                const spendAmount = safeQuoteBalance * (cfg.tradePercent / 100);
+                const vol = Number((spendAmount / botCurrentClose).toFixed(8));
+
+                if (spendAmount <= 0 || isNaN(vol)) {
+                    throw new Error(`Onvoldoende balans op ${updatedBot.config?.exchange || 'Kraken'} (${quoteBalance.toFixed(2)} beschikbaar)`);
+                }
+
+                const orderEndpoint = isCoinbase ? 'http://localhost:3001/api/coinbase/order' : 'http://localhost:3001/api/order';
+                const res = await fetch(orderEndpoint, {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify(newBotsArray)
-              }).catch(err => console.error("Fout bij opslaan bot state:", err));
+                  headers: getApiHeaders(),
+                  body: JSON.stringify({ 
+                      pair: orderPair, 
+                      type: 'buy', 
+                      ordertype: 'market', 
+                      volume: vol,
+                      quoteVolume: spendAmount.toFixed(2)
+                  })
+                });
+                const order = await res.json();
+                
+                if (!order.error) {
+                  state.totalVolume = vol;
+                  state.averageEntryPrice = botCurrentClose;
+                  state.lastAction = 'BUY';
+                  state.lastTradeTime = nowMs;
+                  state.phase = 'WAITING'; 
+                  playTradeSound('buy');
+                  
+                  updatedBot.logs.unshift({ time: new Date().toLocaleTimeString(), msg: `✅ AUTO BUY SUCCESS @ $${botCurrentClose.toFixed(4)}`, type: 'buy' });
 
-              // Ververs grafieken en balansen
-              if (typeof fetchBalances === 'function') fetchBalances();
-              if (typeof fetchOrders === 'function') setTimeout(() => fetchOrders(), 2000);
+                  const newBotsArray = botsRef.current.map(b => b.id === updatedBot.id ? updatedBot : b);
+                  fetch('http://localhost:3001/api/bots', {
+                      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newBotsArray)
+                  }).catch(err => console.error("Fout bij opslaan bot state:", err));
 
-            } else {
-              logMsg = `❌ Auto-Buy Failed: ${order.error}`;
-              updatedBot.logs.push({ time: new Date().toLocaleTimeString(), msg: logMsg, type: 'error' });
-              state.phase = 'WAITING';
+                  if (typeof fetchBalances === 'function') fetchBalances();
+                  if (typeof fetchOrders === 'function') setTimeout(() => fetchOrders(), 2000);
+
+                } else {
+                  logMsg = `❌ Auto-Buy Failed: ${isCoinbase ? JSON.stringify(order.error) : order.error}`;
+                  updatedBot.logs.unshift({ time: new Date().toLocaleTimeString(), msg: logMsg, type: 'error' });
+                  state.phase = 'WAITING'; 
+                }
+            } catch (err) {
+                logMsg = `❌ Pre-Buy Error: ${err.message}`;
+                updatedBot.logs.unshift({ time: new Date().toLocaleTimeString(), msg: logMsg, type: 'error' });
+                state.phase = 'WAITING';
             }
-            state.isProcessing = false; // LOCK UIT
+            state.isProcessing = false; 
+          }
+          // -- HIER BEGINT DE VERKOOP LOGICA --
+          else if (sellSignal && state.totalVolume > 0) {
+            state.isProcessing = true;
+            try {
+                const isCoinbase = updatedBot.config?.exchange === 'Coinbase';
+                const displayParts = updatedBot.pair.display.split('/');
+                const cleanBase = displayParts[0] === 'XBT' ? 'BTC' : displayParts[0];
+                const cleanQuote = displayParts[1] || 'USD';
+                
+                let orderPair = updatedBot.pair.altname;
+                if (isCoinbase) {
+                    const targetQuote = cleanQuote === 'USD' ? 'USDC' : cleanQuote;
+                    orderPair = `${cleanBase}-${targetQuote}`;
+                }
+
+                let actualBaseBalance = 0;
+                if (isCoinbase) {
+                    const resBal = await fetch('http://localhost:3001/api/coinbase/balance', { method: 'POST', headers: getApiHeaders() });
+                    const bData = await resBal.json();
+                    const acc = bData.find(a => a.currency === cleanBase);
+                    actualBaseBalance = acc ? acc.amount : 0;
+                } else {
+                    const resBal = await fetch('http://localhost:3001/api/balance', { method: 'POST', headers: getApiHeaders() });
+                    const bData = await resBal.json();
+                    const baseKey = cleanBase === 'BTC' ? 'XXBT' : (cleanBase === 'ETH' ? 'XETH' : cleanBase);
+                    actualBaseBalance = parseFloat(bData[baseKey] || bData[cleanBase] || 0);
+                }
+
+                const volToSell = Math.min(Number(state.totalVolume.toFixed(8)), actualBaseBalance);
+                
+                if (volToSell <= 0) {
+                    throw new Error(`Geen ${cleanBase} positie gevonden om te verkopen.`);
+                }
+
+                const orderEndpoint = isCoinbase ? 'http://localhost:3001/api/coinbase/order' : 'http://localhost:3001/api/order';
+                const res = await fetch(orderEndpoint, {
+                  method: 'POST',
+                  headers: getApiHeaders(),
+                  body: JSON.stringify({ pair: orderPair, type: 'sell', ordertype: 'market', volume: volToSell })
+                });
+                const order = await res.json();
+                
+                if (!order.error) {
+                  const pnl = (botCurrentClose - state.averageEntryPrice) * volToSell;
+                  const pnlPct = ((botCurrentClose - state.averageEntryPrice) / state.averageEntryPrice) * 100;
+
+                  state.totalVolume = 0;
+                  state.averageEntryPrice = 0;
+                  state.lastAction = 'SELL';
+                  state.lastTradeTime = nowMs;
+                  state.phase = 'WAITING';
+                  playTradeSound(pnl >= 0 ? 'profit' : 'loss');
+
+                  if (!updatedBot.stats) updatedBot.stats = { trades: [], winCount: 0, lossCount: 0, grossProfit: 0, grossLoss: 0 };
+                  updatedBot.stats.trades.push({
+                      id: Date.now().toString().slice(-8), time: new Date().toLocaleString(),
+                      entryPrice: state.averageEntryPrice, exitPrice: botCurrentClose, volume: volToSell, pnl: pnl, pnlPct: pnlPct
+                  });
+
+                  if (pnl >= 0) {
+                      updatedBot.stats.winCount++; updatedBot.stats.grossProfit += pnl;
+                  } else {
+                      updatedBot.stats.lossCount++; updatedBot.stats.grossLoss += Math.abs(pnl);
+                  }
+
+                  updatedBot.logs.unshift({ time: new Date().toLocaleTimeString(), msg: `✅ AUTO SELL SUCCESS @ $${botCurrentClose.toFixed(4)}`, type: 'sell' });
+
+                  const newBotsArray = botsRef.current.map(b => b.id === updatedBot.id ? updatedBot : b);
+                  fetch('http://localhost:3001/api/bots', {
+                      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newBotsArray)
+                  }).catch(err => console.error("Fout bij opslaan bot state:", err));
+
+                  if (typeof fetchBalances === 'function') fetchBalances();
+                  if (typeof fetchOrders === 'function') setTimeout(() => fetchOrders(), 2000);
+
+                } else {
+                  logMsg = `❌ Auto-Sell Failed: ${isCoinbase ? JSON.stringify(order.error) : order.error}`;
+                  updatedBot.logs.unshift({ time: new Date().toLocaleTimeString(), msg: logMsg, type: 'error' });
+                  state.phase = 'WAITING';
+                }
+            } catch (err) {
+                logMsg = `❌ Pre-Sell Error: ${err.message}`;
+                updatedBot.logs.unshift({ time: new Date().toLocaleTimeString(), msg: logMsg, type: 'error' });
+                state.phase = 'WAITING';
+            }
+            state.isProcessing = false;
           }
 
 // -- HIER BEGINT DE VERKOOP LOGICA --
@@ -761,7 +882,7 @@ const fetchBalances = async () => {
       {popoutCharts.map((pop, i) => (
         <PopoutWindow key={`popout-${i}`} title={`Trading - ${pop.pair?.display}`} externalWindow={pop.win} onClose={() => closePopout(i)}>
           <div className="flex-1 flex flex-col h-screen w-full overflow-hidden bg-[#09090b]">
-             <TradingChart pair={pop.pair} timeframe={timeframe} showVolume={showVolume} signals={signals} positions={tradeHistory} scriptLoaded={scriptLoaded} isActive={false} isDrawingMode={isDrawingMode} externalWindow={pop.win} />
+             <TradingChart bots={bots} pair={pop.pair} timeframe={timeframe} showVolume={showVolume} signals={signals} positions={tradeHistory} scriptLoaded={scriptLoaded} isActive={false} isDrawingMode={isDrawingMode} externalWindow={pop.win} />
           </div>
         </PopoutWindow>
       ))}
@@ -889,9 +1010,9 @@ const fetchBalances = async () => {
 
               <div className={`flex-1 flex flex-col bg-[#09090b] ${layout === 4 ? 'grid grid-cols-2 grid-rows-2' : ''}`}>
                 {layout === 1 ? (
-                  <TradingChart pair={gridPairs[activeIndex]} timeframe={timeframe} showVolume={showVolume} signals={signals} positions={tradeHistory} scriptLoaded={scriptLoaded} isActive={true} isDrawingMode={isDrawingMode} onPopout={() => openPopout({ ...gridPairs[activeIndex] })} />
+                  <TradingChart bots={bots} pair={gridPairs[activeIndex]} timeframe={timeframe} showVolume={showVolume} signals={signals} positions={tradeHistory} scriptLoaded={scriptLoaded} isActive={true} isDrawingMode={isDrawingMode} onPopout={() => openPopout({ ...gridPairs[activeIndex] })} />
                 ) : (
-                  gridPairs.slice(0, 4).map((p, i) => (<TradingChart key={`chart-${i}-${p?.id}`} pair={p} timeframe={timeframe} showVolume={showVolume} signals={signals} positions={tradeHistory} scriptLoaded={scriptLoaded} isActive={activeIndex === i} isDrawingMode={isDrawingMode} onClick={() => setActiveIndex(i)} onPopout={() => openPopout({ ...p })} />))
+                  gridPairs.slice(0, 4).map((p, i) => (<TradingChart key={`chart-${i}-${p?.id}`} bots={bots} pair={p} timeframe={timeframe} showVolume={showVolume} signals={signals} positions={tradeHistory} scriptLoaded={scriptLoaded} isActive={activeIndex === i} isDrawingMode={isDrawingMode} onClick={() => setActiveIndex(i)} onPopout={() => openPopout({ ...p })} />))
                 )}
               </div>
 

@@ -13,21 +13,15 @@ const MasterDashboardView = ({
   activePair = { display: 'BTC/USD' }
 }) => {
 
-  // 1. 🔑 API CHECKS VOOR MULTI-EXCHANGE UI
   const apiStatus = useMemo(() => {
     try {
       const keys = JSON.parse(localStorage.getItem('trading_api_keys') || '{}');
-      return {
-        gemini: !!keys.geminiKey,
-        kraken: !!keys.krakenKey,
-        coinbase: !!keys.cbKey
-      };
+      return { gemini: !!keys.geminiKey, kraken: !!keys.krakenKey, coinbase: !!keys.cbKey };
     } catch (e) { 
       return { gemini: false, kraken: false, coinbase: false }; 
     }
   }, []);
 
-  // 2. 🛠️ DATA NORMALISATIE
   const balancesArray = useMemo(() => {
     if (Array.isArray(balances)) return balances;
     return Object.entries(balances || {}).map(([coin, amount]) => {
@@ -36,11 +30,10 @@ const MasterDashboardView = ({
     });
   }, [balances]);
 
-  // 3. 🚀 LIVE PRIJZEN OPHALEN
   const [livePrices, setLivePrices] = useState({});
   useEffect(() => {
     const fetchPrices = async () => {
-      const cryptos = [...new Set(balancesArray.filter(b => b.currency !== 'USD').map(b => b.currency))];
+      const cryptos = [...new Set(balancesArray.filter(b => b.currency !== 'USD' && b.currency !== 'EUR').map(b => b.currency))];
       if (cryptos.length === 0) return;
       const pairs = cryptos.map(c => `${c === 'BTC' ? 'XBT' : c}USD`).join(',');
       try {
@@ -63,68 +56,60 @@ const MasterDashboardView = ({
     return () => clearInterval(interval);
   }, [balancesArray]);
 
-  // 4. 🧩 BEREKEN ACTUELE TOTALE WAARDE
   const currentTotalUsdValue = useMemo(() => {
       if (balancesArray.length === 0) return 0;
       let totalUsd = 0;
       balancesArray.forEach(b => {
-          let usdValue = b.currency === 'USD' ? b.amount : b.amount * (livePrices[b.currency] || 0);
+          let usdValue = (b.currency === 'USD' || b.currency === 'EUR') ? b.amount : b.amount * (livePrices[b.currency] || 0);
           if (usdValue > 0.1) totalUsd += usdValue;
       });
       return totalUsd;
   }, [balancesArray, livePrices]);
 
-  // 5. 📈 LOKALE GRAFIEK BEHEERDER (Voor correcte 24H meting)
+  // 🔥 DE FIX: Wacht met opslaan tot prijzen bekend zijn en gebruik 'portfolio_history_v3'
   const [chartHistory, setChartHistory] = useState(() => {
-      try { return JSON.parse(localStorage.getItem('portfolio_history_v2')) || []; }
+      try { return JSON.parse(localStorage.getItem('portfolio_history_v3')) || []; }
       catch { return []; }
   });
 
+  const hasCryptos = balancesArray.some(b => b.currency !== 'USD' && b.currency !== 'EUR');
+  const pricesLoaded = Object.keys(livePrices).length > 0;
+  const isDataReady = !hasCryptos || pricesLoaded;
+
   useEffect(() => {
-      if (currentTotalUsdValue > 1) {
+      if (currentTotalUsdValue > 1 && isDataReady) {
           setChartHistory(prev => {
               const now = Math.floor(Date.now() / 1000);
               const last = prev[prev.length - 1];
               if (!last || Math.abs(last.value - currentTotalUsdValue) > 1 || now - last.time > 60) {
                   const newCurve = [...prev, { time: now, value: currentTotalUsdValue }];
                   const trimmed = newCurve.slice(-500);
-                  localStorage.setItem('portfolio_history_v2', JSON.stringify(trimmed));
+                  localStorage.setItem('portfolio_history_v3', JSON.stringify(trimmed));
                   return trimmed;
               }
               return prev;
           });
       }
-  }, [currentTotalUsdValue]);
+  }, [currentTotalUsdValue, isDataReady]);
 
-  // 6. 📊 24H BEREKENING
   const pnl24h = useMemo(() => {
     if (chartHistory.length < 2) return { value: 0, pct: 0, isPositive: true };
-
     const now = Math.floor(Date.now() / 1000);
-    const cutoff = now - 86400; // 24H geleden
-
+    const cutoff = now - 86400; 
     const validHistory = chartHistory.filter(p => p.time >= cutoff);
     const start = validHistory.length > 0 ? validHistory[0].value : chartHistory[0].value;
     const end = currentTotalUsdValue || chartHistory[chartHistory.length - 1].value;
-
     const diff = end - start;
-    return {
-      value: diff,
-      pct: start > 0 ? (diff / start) * 100 : 0,
-      isPositive: diff >= 0
-    };
+    return { value: diff, pct: start > 0 ? (diff / start) * 100 : 0, isPositive: diff >= 0 };
   }, [chartHistory, currentTotalUsdValue]);
 
   const activeBotsCount = useMemo(() => bots.filter(b => b.isRunning).length, [bots]);
 
   return (
     <div className="flex-1 flex flex-col bg-[#020203] h-full overflow-y-auto font-sans text-zinc-300 custom-scrollbar relative">
-      
-      {/* Background Glows */}
       <div className="absolute top-0 left-1/4 w-[500px] h-[500px] bg-indigo-600/10 rounded-full blur-[120px] pointer-events-none"></div>
       <div className="absolute bottom-0 right-1/4 w-[500px] h-[500px] bg-blue-600/5 rounded-full blur-[120px] pointer-events-none"></div>
 
-      {/* 🚀 Hero Sectie met Multi-Exchange Badges */}
       <div className="h-20 border-b border-white/5 bg-[#09090b]/80 backdrop-blur-2xl sticky top-0 z-[60] flex justify-between items-center px-8 shrink-0">
         <div className="flex items-center gap-4">
           <div className="p-3 bg-gradient-to-br from-indigo-500/20 to-purple-500/20 rounded-xl border border-indigo-500/30 shadow-[0_0_20px_rgba(99,102,241,0.15)] relative overflow-hidden">
@@ -164,8 +149,6 @@ const MasterDashboardView = ({
       </div>
 
       <div className="p-8 max-w-[1800px] mx-auto w-full space-y-6">
-        
-        {/* TOP ROW: KPI CARDS */}
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
             <div className="bg-gradient-to-br from-[#0b0e11] to-[#09090b] border border-white/5 rounded-3xl p-6 shadow-2xl relative overflow-hidden group">
                 <div className="absolute top-0 right-0 p-6 opacity-20 group-hover:opacity-40 transition-opacity"><Wallet size={40} className="text-indigo-400"/></div>
@@ -216,13 +199,9 @@ const MasterDashboardView = ({
             </div>
         </div>
 
-        {/* MIDDLE ROW: BOTS & WHALES */}
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-            
-            {/* ALGORITHMIC FLEET STATUS (Span 2) */}
             <div className="xl:col-span-2 bg-[#09090b] border border-white/5 rounded-[2rem] p-8 shadow-2xl relative overflow-hidden flex flex-col">
                 <div className="absolute -top-24 -right-24 w-64 h-64 bg-indigo-600/10 blur-[100px] pointer-events-none"></div>
-                
                 <div className="flex justify-between items-center mb-6 relative z-10">
                     <div className="flex items-center gap-3">
                         <div className="p-2 bg-indigo-500/10 rounded-lg"><Cpu size={18} className="text-indigo-400" /></div>
@@ -230,7 +209,6 @@ const MasterDashboardView = ({
                     </div>
                     <button className="text-[10px] uppercase font-black text-zinc-500 hover:text-white transition-colors">View All</button>
                 </div>
-
                 <div className="flex-1 overflow-x-auto relative z-10">
                     <table className="w-full text-left border-separate border-spacing-y-2">
                         <thead>
@@ -287,7 +265,6 @@ const MasterDashboardView = ({
                 </div>
             </div>
 
-            {/* INSTITUTIONAL ORDER FLOW (Whales) */}
             <div className="bg-[#09090b] border border-white/5 rounded-[2rem] p-8 shadow-2xl relative overflow-hidden flex flex-col">
                 <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-600 to-indigo-600"></div>
                 <div className="flex justify-between items-center mb-6">
@@ -320,7 +297,6 @@ const MasterDashboardView = ({
             </div>
         </div>
 
-        {/* BOTTOM ROW: GEMINI AI NEXUS */}
         <div className="bg-gradient-to-br from-indigo-900/20 to-purple-900/10 border border-indigo-500/20 rounded-[2rem] p-8 shadow-2xl relative overflow-hidden">
             <Sparkles className="absolute top-0 right-0 text-indigo-500/10 w-48 h-48 -translate-y-1/4 translate-x-1/4" />
             
@@ -332,7 +308,6 @@ const MasterDashboardView = ({
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-8 relative z-10">
-                {/* Sentiment & Insight */}
                 <div className="md:col-span-2 flex flex-col justify-center space-y-4">
                     <div className="bg-black/40 border border-white/5 p-4 rounded-xl">
                         <span className="text-[9px] font-black text-zinc-500 uppercase tracking-widest block mb-1">Macro Analysis</span>
@@ -351,7 +326,6 @@ const MasterDashboardView = ({
                     </div>
                 </div>
 
-                {/* Bias & Confidence Meter */}
                 <div className="flex flex-col justify-center border-l border-white/5 pl-8">
                     <div className="mb-6">
                         <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-1 block">Market Bias</span>

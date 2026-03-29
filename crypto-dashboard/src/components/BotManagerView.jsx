@@ -3,7 +3,7 @@ import {
   Settings, Activity, Layers, Bot, X, Trash2, Plus, Play, Pause, 
   ShieldAlert, Target, TrendingUp, AlertTriangle, Clock, ArrowDownToLine, 
   Sparkles, BrainCircuit, BarChart2, ShieldCheck, Power, SunMoon, HelpCircle, History, Hand, 
-  Copy, RotateCcw, Save,Eye
+  Copy, RotateCcw, Save,Eye, Database
 } from 'lucide-react';
 
 // ==========================================
@@ -19,7 +19,9 @@ const getApiHeaders = () => {
         'x-dashboard-token': token,
         'x-kraken-api-key': keys.krakenKey || '',
         'x-kraken-api-secret': keys.krakenSecret || '',
-        'x-gemini-api-key': keys.geminiKey || ''
+        'x-gemini-api-key': keys.geminiKey || '',
+        'x-cb-api-key': (keys.cbKey || '').trim(),
+        'x-cb-api-secret': keys.cbSecret || '' 
     };
 };
 
@@ -69,7 +71,7 @@ const BotLogTerminal = ({ logs }) => {
     <div 
       ref={terminalRef}
       className="h-44 bg-[#050505]/80 rounded-xl p-3 overflow-y-auto text-[10px] font-mono border border-zinc-800/50 flex flex-col space-y-1 mt-4 custom-scrollbar"
-      style={{ scrollBehavior: 'smooth' }} // Zorgt voor de vloeiende beweging zonder de pagina te storen
+      style={{ scrollBehavior: 'smooth' }}
     >
       {safeLogs.length === 0 && <span className="text-zinc-600">Bot initialized. Waiting for data...</span>}
       {safeLogs.map((l, i) => (
@@ -99,6 +101,7 @@ const BotManagerView = ({ bots, setBots, availablePairs, activePair }) => {
   
   // --- FORM STATES ---
   const [newBotPair, setNewBotPair] = useState(activePair);
+  const [newBotExchange, setNewBotExchange] = useState('Kraken'); // 🔥 MULTI-EXCHANGE SUPPORT
   const [newBotStrategy, setNewBotStrategy] = useState('RSI_TREND');
   const [botTimeframe, setBotTimeframe] = useState('15m');
   const [tradePercent, setTradePercent] = useState('10'); 
@@ -166,6 +169,7 @@ const BotManagerView = ({ bots, setBots, availablePairs, activePair }) => {
     setNewBotPair(bot.pair);
     setNewBotStrategy(bot.strategy);
     const cfg = bot.config || {};
+    setNewBotExchange(cfg.exchange || 'Kraken'); // Laad exchange
     setBotTimeframe(cfg.timeframe || '15m');
     setTradePercent(cfg.tradePercent || '10');
     setSlPct(cfg.slPct || 3.0);
@@ -204,6 +208,7 @@ const BotManagerView = ({ bots, setBots, availablePairs, activePair }) => {
         return parseFloat(String(val).replace(',', '.'));
     };
     const config = { 
+        exchange: newBotExchange, // 🔥 Opslaan exchange
         timeframe: botTimeframe, sizingType: 'percent', tradePercent: parseNum(tradePercent),
         slPct: parseNum(slPct), tpPct: parseNum(tpPct),
         useTrailing, trailingPct: parseNum(trailingPct),
@@ -227,7 +232,7 @@ const BotManagerView = ({ bots, setBots, availablePairs, activePair }) => {
           isRunning: true, 
           state: { phase: 'WAITING', currentPrice: 0, lastAction: 'NONE', averageEntryPrice: 0, totalVolume: 0, livePnl: 0, livePnlPct: 0, consecutiveLosses: 0 }, 
           stats: { trades: [], winCount: 0, lossCount: 0, grossProfit: 0, grossLoss: 0 },
-          logs: [{time: new Date().toLocaleTimeString(), msg: `🚀 Bot gestart op ${newBotPair.display}`, type: 'success'}], 
+          logs: [{time: new Date().toLocaleTimeString(), msg: `🚀 Bot gestart op ${newBotPair.display} via ${newBotExchange}`, type: 'success'}], 
           config
         };
         setBots([...bots, newBot]);
@@ -243,129 +248,147 @@ const BotManagerView = ({ bots, setBots, availablePairs, activePair }) => {
       setAiSuggestion(null);
   };
 
-const handleManualTrade = async (botId, side) => {
+  // 🔥 MULTI-EXCHANGE MANUAL TRADE HANDLER
+// 🔥 MULTI-EXCHANGE MANUAL TRADE HANDLER
+// 🔥 MULTI-EXCHANGE MANUAL TRADE HANDLER
+  const handleManualTrade = async (botId, side) => {
     if (!window.confirm(`Force ${side} order for this bot?`)) return;
     
-    const newBots = [...bots];
+    const newBots = JSON.parse(JSON.stringify(bots));
     const botIdx = newBots.findIndex(b => b.id === botId);
     const bot = newBots[botIdx];
+    const isCoinbase = bot.config?.exchange === 'Coinbase';
 
-    // Herleiden van de pair info voor robuustheid
     const displayParts = bot.pair.display.split('/');
-    const detectedQuote = bot.pair.quote || (displayParts.length > 1 ? displayParts[1] : 'USD');
-    const detectedBase = bot.pair.base || displayParts[0];
+    const cleanBase = displayParts[0] === 'XBT' ? 'BTC' : displayParts[0]; 
+    const cleanQuote = displayParts[1] || 'USD'; 
 
-    bot.logs.push({ 
-        time: new Date().toLocaleTimeString(), 
-        msg: `⚡ Manual ${side} override triggered for ${bot.pair.display}...`, 
-        type: 'info' 
-    });
-    setBots([...newBots]);
+    // 🪄 DE MAGISCHE TRUC: Als we op Coinbase handelen, stuur 'USD' orders altijd naar de 'USDC' markt!
+    let orderPair = bot.pair.altname;
+    if (isCoinbase) {
+        const targetQuote = cleanQuote === 'USD' ? 'USDC' : cleanQuote;
+        orderPair = `${cleanBase}-${targetQuote}`; // Maakt hier dus netjes XRP-USDC van
+    }
+
+    bot.logs.unshift({ time: new Date().toLocaleTimeString(), msg: `⚡ Manual ${side} override triggered on ${bot.config?.exchange || 'Kraken'}...`, type: 'info' });
+    setBots(newBots);
 
     try {
-        const data = await fetchKrakenOHLC(1, bot.pair.altname);
+        const data = await fetchKrakenOHLC(1, bot.pair.altname); 
         if (!data || data.length === 0) throw new Error("Market data unavailable.");
-        
         const currentPrice = data[data.length - 1].close;
 
         if (side === 'BUY') {
-            const resBal = await fetch(`${API_BASE}/api/balance`, { 
-                method: 'POST', 
-                headers: getApiHeaders() 
-            });
-            const bData = await resBal.json();
-            
-            // Kraken mapping voor fiat (USD -> ZUSD, EUR -> ZEUR)
-            const quoteKey = detectedQuote === 'USD' ? 'ZUSD' : (detectedQuote === 'EUR' ? 'ZEUR' : detectedQuote);
-            const quoteBalance = parseFloat(bData[quoteKey] || bData[detectedQuote] || 0);
-            
-            // 🔥 FIX 1: 2% veiligheidsmarge inbouwen voor Kraken fees (0.26%) en Market Slippage
-            const safeQuoteBalance = quoteBalance * 0.98;
-            
-            const volumeToBuy = Number(((safeQuoteBalance * (bot.config.tradePercent / 100)) / currentPrice).toFixed(8));
-
-            if (volumeToBuy <= 0) {
-                throw new Error(`Insufficient ${detectedQuote} balance (Available: ${quoteBalance.toFixed(2)})`);
+            let quoteBalance = 0;
+            if (isCoinbase) {
+                const resBal = await fetch(`${API_BASE}/api/coinbase/balance`, { method: 'POST', headers: getApiHeaders() });
+                const bData = await resBal.json();
+                
+                const acc = bData.find(a => a.currency === cleanQuote);
+                quoteBalance = acc ? acc.amount : 0;
+                
+                // Telt je USDC balans mee als koopkracht
+                if (cleanQuote === 'USD') {
+                    const usdcAcc = bData.find(a => a.currency === 'USDC');
+                    if (usdcAcc) quoteBalance += usdcAcc.amount;
+                }
+            } else {
+                const resBal = await fetch(`${API_BASE}/api/balance`, { method: 'POST', headers: getApiHeaders() });
+                const bData = await resBal.json();
+                const quoteKey = cleanQuote === 'USD' ? 'ZUSD' : (cleanQuote === 'EUR' ? 'ZEUR' : cleanQuote);
+                quoteBalance = parseFloat(bData[quoteKey] || bData[cleanQuote] || 0);
             }
+            
+            const safeQuoteBalance = quoteBalance * 0.98;
+            const spendAmount = safeQuoteBalance * (bot.config.tradePercent / 100);
+            const volumeToBuy = Number((spendAmount / currentPrice).toFixed(8));
 
-            const resOrder = await fetch(`${API_BASE}/api/order`, { 
-                method: 'POST', 
-                headers: getApiHeaders(), 
+            if (spendAmount <= 0) throw new Error(`Insufficient balance on ${bot.config.exchange} (Available: ${quoteBalance.toFixed(2)} USDC)`);
+
+            const orderEndpoint = isCoinbase ? '/api/coinbase/order' : '/api/order';
+            const resOrder = await fetch(`${API_BASE}${orderEndpoint}`, { 
+                method: 'POST', headers: getApiHeaders(), 
                 body: JSON.stringify({ 
-                    pair: bot.pair.altname, 
+                    pair: orderPair, 
                     type: 'buy', 
                     ordertype: 'market', 
-                    volume: volumeToBuy 
+                    volume: volumeToBuy,
+                    quoteVolume: spendAmount.toFixed(2)
                 }) 
             });
             const oData = await resOrder.json();
-            if (oData.error) throw new Error(oData.error);
+            if (oData.error) throw new Error(isCoinbase ? JSON.stringify(oData.error) : oData.error);
 
-            bot.logs.push({ time: new Date().toLocaleTimeString(), msg: `✅ MANUAL BUY SUCCESS @ $${currentPrice.toFixed(4)}`, type: 'buy' });
+            bot.logs.unshift({ time: new Date().toLocaleTimeString(), msg: `✅ MANUAL BUY SUCCESS @ $${currentPrice.toFixed(4)}`, type: 'buy' });
             bot.state.totalVolume += volumeToBuy; 
             bot.state.averageEntryPrice = currentPrice;
+            bot.state.entryTime = Math.floor(Date.now() / 1000);
 
         } else {
-            // 🔥 FIX 2: Haal de échte actuele base-balans op (na eventuele fee aftrek van Kraken)
-            const resBal = await fetch(`${API_BASE}/api/balance`, { method: 'POST', headers: getApiHeaders() });
-            const bData = await resBal.json();
-            const baseKey = detectedBase === 'BTC' ? 'XXBT' : (detectedBase === 'ETH' ? 'XETH' : detectedBase);
-            const actualBaseBalance = parseFloat(bData[baseKey] || bData[detectedBase] || 0);
+            let actualBaseBalance = 0;
+            if (isCoinbase) {
+                const resBal = await fetch(`${API_BASE}/api/coinbase/balance`, { method: 'POST', headers: getApiHeaders() });
+                const bData = await resBal.json();
+                const acc = bData.find(a => a.currency === cleanBase);
+                actualBaseBalance = acc ? acc.amount : 0;
+            } else {
+                const resBal = await fetch(`${API_BASE}/api/balance`, { method: 'POST', headers: getApiHeaders() });
+                const bData = await resBal.json();
+                const baseKey = cleanBase === 'BTC' ? 'XXBT' : (cleanBase === 'ETH' ? 'XETH' : cleanBase);
+                actualBaseBalance = parseFloat(bData[baseKey] || bData[cleanBase] || 0);
+            }
 
-            // Verkoop wat de bot registreert, maar NOOIT meer dan wat daadwerkelijk in de wallet staat
             const volToSell = Math.min(Number(bot.state.totalVolume.toFixed(8)), actualBaseBalance);
-            
-            if (volToSell <= 0) throw new Error(`No ${detectedBase} position to sell. (Wallet balance: ${actualBaseBalance})`);
+            if (volToSell <= 0) throw new Error(`No position found on ${bot.config.exchange} (Balance: ${actualBaseBalance} ${cleanBase})`);
 
-            const resOrder = await fetch(`${API_BASE}/api/order`, { 
-                method: 'POST', 
-                headers: getApiHeaders(), 
-                body: JSON.stringify({ 
-                    pair: bot.pair.altname, 
-                    type: 'sell', 
-                    ordertype: 'market', 
-                    volume: volToSell 
-                }) 
+            const orderEndpoint = isCoinbase ? '/api/coinbase/order' : '/api/order';
+            const resOrder = await fetch(`${API_BASE}${orderEndpoint}`, { 
+                method: 'POST', headers: getApiHeaders(), 
+                body: JSON.stringify({ pair: orderPair, type: 'sell', ordertype: 'market', volume: volToSell }) 
             });
             const oData = await resOrder.json();
-            if (oData.error) throw new Error(oData.error);
+            if (oData.error) throw new Error(isCoinbase ? JSON.stringify(oData.error) : oData.error);
             
-            // 🔥 FIX 3: Gecrashte variabelen (nowMs en pnl) gefixt
             const pnl = (currentPrice - bot.state.averageEntryPrice) * volToSell;
-            const pnlPct = ((botCurrentClose - state.averageEntryPrice) / state.averageEntryPrice) * 100;
+            const pnlPct = ((currentPrice - bot.state.averageEntryPrice) / bot.state.averageEntryPrice) * 100;
             
-            bot.logs.push({ time: new Date().toLocaleTimeString(), msg: `✅ MANUAL SELL SUCCESS @ $${currentPrice.toFixed(4)}`, type: 'sell' });
-            stats.trades.push({
-                  id: Date.now().toString().slice(-8),
-                  time: new Date().toLocaleString(), // Datum en tijd
-                  entryPrice: state.averageEntryPrice,
-                  exitPrice: botCurrentClose,
-                  volume: state.totalVolume,
-                  pnl: pnl,
-                  pnlPct: pnlPct
-              });
-            bot.state.totalVolume = 0; 
-            bot.state.averageEntryPrice = 0;
+            bot.logs.unshift({ time: new Date().toLocaleTimeString(), msg: `✅ MANUAL SELL SUCCESS @ $${currentPrice.toFixed(4)}`, type: 'sell' });
+            
+            if (!bot.stats) bot.stats = { trades: [], winCount: 0, lossCount: 0, grossProfit: 0, grossLoss: 0 };
+            if (!bot.stats.trades) bot.stats.trades = [];
+
+            bot.stats.trades.push({
+                  id: Date.now().toString().slice(-8), time: new Date().toLocaleString(),
+                  entryTime: bot.state.entryTime || (Math.floor(Date.now() / 1000) - 3600), // 👈 VOEG DEZE REGEL TOE
+                  exitTime: Math.floor(Date.now() / 1000), // 👈 VOEG DEZE REGEL TOE
+                  entryPrice: bot.state.averageEntryPrice, exitPrice: currentPrice, volume: bot.state.totalVolume, pnl: pnl, pnlPct: pnlPct
+            });
+
+            if (pnl >= 0) {
+                bot.stats.winCount = (bot.stats.winCount || 0) + 1; bot.stats.grossProfit = (bot.stats.grossProfit || 0) + pnl;
+            } else {
+                bot.stats.lossCount = (bot.stats.lossCount || 0) + 1; bot.stats.grossLoss = (bot.stats.grossLoss || 0) + Math.abs(pnl);
+            }
+
+            bot.state.totalVolume = 0; bot.state.averageEntryPrice = 0;
         }
+
         setBots([...newBots]);
+        fetch('http://localhost:3001/api/bots', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newBots)
+        }).catch(err => console.error("Fout bij opslaan bot state:", err));
+
     } catch (err) { 
-        console.error("Manual Trade Error:", err);
-        bot.logs.push({ 
-            time: new Date().toLocaleTimeString(), 
-            msg: `❌ ERROR: ${err.message}`, 
-            type: 'error' 
-        }); 
+        bot.logs.unshift({ time: new Date().toLocaleTimeString(), msg: `❌ ERROR: ${err.message}`, type: 'error' }); 
         setBots([...newBots]); 
     }
-};
+  };
 
   const setAllBotsState = (isRunning) => setBots(bots.map(b => ({ ...b, isRunning })));
 
-  
-
   return (
     <div className="flex-1 flex flex-col bg-[#050505] h-full overflow-y-auto">
-      {aiStyle} {/* 👈 VOEG DIT TOE ZODAT DE CSS GELADEN WORDT */}
+      {aiStyle}
       <div className="h-16 border-b border-zinc-800 flex items-center justify-between px-6 bg-[#09090b] shrink-0 sticky top-0 z-[60]">
         <div className="flex items-center"><Bot className="w-5 h-5 text-purple-500 mr-3" /><div><h2 className="text-zinc-100 font-bold tracking-wide">Auto Trading Bots</h2><p className="text-[10px] text-zinc-500 uppercase tracking-widest">Multi-Strategy Quant Engine</p></div></div>
         {!isCreating && (
@@ -392,6 +415,16 @@ const handleManualTrade = async (botId, side) => {
                 <div className="space-y-6">
                   <div className="bg-[#09090b] p-5 rounded-2xl border border-zinc-800/50 space-y-5">
                     <h4 className="text-xs uppercase text-zinc-400 font-bold flex items-center gap-2 mb-2"><Activity size={14}/> Strategy & Market</h4>
+                    
+                    {/* 🔥 NIEUW: Exchange Selector */}
+                    <div className="space-y-1 pb-2 border-b border-white/5">
+                      <label className="text-[10px] text-zinc-500 uppercase font-bold flex items-center">Exchange Endpoint <InfoTooltip text="Kies op welke beurs deze bot zijn orders moet uitvoeren." /></label>
+                      <div className="flex gap-2">
+                          <button onClick={() => setNewBotExchange('Kraken')} className={`flex-1 py-2 text-xs font-bold uppercase rounded-xl transition ${newBotExchange === 'Kraken' ? 'bg-purple-600 text-white border border-purple-500/50 shadow-[0_0_15px_rgba(168,85,247,0.3)]' : 'bg-zinc-900 text-zinc-500 border border-white/5 hover:text-zinc-300'}`}>Kraken</button>
+                          <button onClick={() => setNewBotExchange('Coinbase')} className={`flex-1 py-2 text-xs font-bold uppercase rounded-xl transition ${newBotExchange === 'Coinbase' ? 'bg-blue-600 text-white border border-blue-500/50 shadow-[0_0_15px_rgba(59,130,246,0.3)]' : 'bg-zinc-900 text-zinc-500 border border-white/5 hover:text-zinc-300'}`}>Coinbase</button>
+                      </div>
+                    </div>
+
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-1">
                         <label className="text-[10px] text-zinc-500 uppercase font-bold flex items-center">Trading Pair <InfoTooltip text="The crypto pair this bot will trade." /></label>
@@ -599,6 +632,7 @@ const handleManualTrade = async (botId, side) => {
                  const tradesLen = (stats.trades || []).length;
                  const winrate = tradesLen === 0 ? 0 : Math.round(((stats.winCount || 0) / tradesLen) * 100);
                  const pf = (stats.grossLoss || 0) === 0 ? ((stats.grossProfit || 0) > 0 ? '∞' : '0.0') : ((stats.grossProfit || 0) / (stats.grossLoss || 0)).toFixed(2);
+                 const isCoinbase = bot.config?.exchange === 'Coinbase';
 
                  return (
                     <div 
@@ -613,13 +647,10 @@ const handleManualTrade = async (botId, side) => {
                           : 'border-white/5 bg-[#0b0e11]'
                       }`}
                     >
-                      {/* Subtiele achtergrond glow */}
                       <div className={`absolute -top-24 -right-24 w-64 h-64 blur-[100px] pointer-events-none transition-opacity duration-1000 ${bot.isRunning ? 'bg-blue-600/10 opacity-100' : 'bg-rose-600/5 opacity-50'}`}></div>
                       
-                      {/* Gecorrigeerde Header voor BotManagerView.jsx */}
                       <div className="flex justify-between items-start mb-6 relative z-10">
                           <div className="flex items-center gap-4">
-                            {/* Geanimeerde Status Pulse */}
                             <div className="relative">
                               <div className={`w-12 h-12 rounded-2xl flex items-center justify-center border ${bot.isRunning ? 'border-blue-500/30 bg-blue-500/10' : 'border-zinc-800 bg-zinc-900'}`}>
                                 <Bot size={24} className={bot.isRunning ? 'text-blue-400 animate-pulse' : 'text-zinc-600'} />
@@ -631,6 +662,10 @@ const handleManualTrade = async (botId, side) => {
                             <div>
                               <h3 className="text-xl font-black text-white tracking-tighter">{bot.pair?.display}</h3>
                               <div className="flex items-center gap-2">
+                                {/* 🔥 NIEUW: Exchange Badge */}
+                                <span className={`text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md border flex items-center gap-1 ${isCoinbase ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' : 'bg-purple-500/10 text-purple-400 border-purple-500/20'}`}>
+                                  <Database size={10} /> {isCoinbase ? 'CB' : 'KRAKEN'}
+                                </span>
                                 <span className="text-[9px] font-black text-blue-500 uppercase tracking-widest px-2 py-0.5 bg-blue-500/10 rounded-md border border-blue-500/20">
                                   {bot.strategy}
                                 </span>
@@ -639,44 +674,15 @@ const handleManualTrade = async (botId, side) => {
                             </div>
                           </div>
 
-                        {/* 🛠️ DE ACTIE KNOPPEN - CONTROLEER DEZE ONCLICK FUNCTIES */}
                         <div className="flex bg-black/50 border border-white/5 rounded-2xl p-1.5 backdrop-blur-md">
-                          {/* PAUSE / PLAY KNOP */}
-                          <button 
-                            onClick={() => setBots(bots.map(b => b.id === bot.id ? { ...b, isRunning: !b.isRunning } : b))}
-                            className="p-2 transition-colors group/btn"
-                            title={bot.isRunning ? "Pause Bot" : "Start Bot"}
-                          >
-                            {bot.isRunning ? (
-                              <Pause size={18} className="text-amber-500 group-hover/btn:scale-110 transition-transform" />
-                            ) : (
-                              <Play size={18} className="text-emerald-500 group-hover/btn:scale-110 transition-transform" />
-                            )}
+                          <button onClick={() => setBots(bots.map(b => b.id === bot.id ? { ...b, isRunning: !b.isRunning } : b))} className="p-2 transition-colors group/btn" title={bot.isRunning ? "Pause Bot" : "Start Bot"}>
+                            {bot.isRunning ? <Pause size={18} className="text-amber-500 group-hover/btn:scale-110 transition-transform" /> : <Play size={18} className="text-emerald-500 group-hover/btn:scale-110 transition-transform" />}
                           </button>
-
-                          {/* SETTINGS KNOP */}
-                          <button 
-                            onClick={() => startEditing(bot)}
-                            className="p-2 text-zinc-500 hover:text-blue-400 transition-colors"
-                          >
-                            <Settings size={18} />
-                          </button>
-
-                          {/* VERWIJDER KNOP */}
-                          <button 
-                            onClick={() => {
-                              if(window.confirm("Are you sure you want to delete this bot?")) {
-                                setBots(bots.filter(b => b.id !== bot.id));
-                              }
-                            }}
-                            className="p-2 text-zinc-600 hover:text-rose-500 transition-colors"
-                          >
-                            <Trash2 size={18} />
-                          </button>
+                          <button onClick={() => startEditing(bot)} className="p-2 text-zinc-500 hover:text-blue-400 transition-colors"><Settings size={18} /></button>
+                          <button onClick={() => { if(window.confirm("Are you sure you want to delete this bot?")) setBots(bots.filter(b => b.id !== bot.id)); }} className="p-2 text-zinc-600 hover:text-rose-500 transition-colors"><Trash2 size={18} /></button>
                         </div>
                       </div>
 
-                      {/* Performance Matrix met Glass-effect */}
                       <div className="grid grid-cols-2 gap-3 mb-6 relative z-10">
                         <div className="bg-white/[0.03] border border-white/5 rounded-2xl p-4 transition-colors hover:bg-white/[0.05]">
                           <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Total Return</span>
@@ -690,15 +696,10 @@ const handleManualTrade = async (botId, side) => {
                         </div>
                       </div>
 
-                      {/* BotManagerView.jsx - Alleen tonen als AI Filter actief is */}
-
-
-
                       <div className="grid grid-cols-2 gap-4 mb-6">
                         <div className="bg-black/40 border border-white/5 rounded-2xl p-4 relative overflow-hidden">
                           <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest block mb-2">Live RSI Momentum</span>
                           <div className="flex items-end gap-1 h-8">
-                            {/* Een kleine visuele indicator van RSI bars */}
                             {[40, 55, 45, 60, 50, 65, 70, 55].map((h, i) => (
                               <div key={i} className={`flex-1 rounded-t-sm transition-all duration-1000 ${bot.isRunning ? 'bg-blue-500/40' : 'bg-zinc-800'}`} style={{ height: `${h}%` }}></div>
                             ))}
@@ -731,7 +732,6 @@ const handleManualTrade = async (botId, side) => {
                         </div>
                       </div>
 
-                     {/* BADGES */}
                      <div className="flex flex-wrap gap-2 mb-8">
                         <span className="text-[10px] bg-zinc-800 text-zinc-400 px-2.5 py-1 rounded-md font-mono font-bold">{bot.config?.timeframe || '15m'}</span>
                         <span className="text-[10px] bg-blue-600/20 text-blue-400 border border-blue-500/20 px-2.5 py-1 rounded-md font-bold uppercase">{bot.strategy?.replace('_', ' ') || 'RSI'}</span>
@@ -742,7 +742,6 @@ const handleManualTrade = async (botId, side) => {
                         {bot.config?.useDca && <span className="text-[10px] bg-blue-600/20 text-blue-400 border border-blue-500/20 px-2.5 py-1 rounded-md font-bold uppercase tracking-wider">DCA</span>}
                      </div>
 
-                     {/* STATS */}
                      <div className="grid grid-cols-4 gap-4 bg-black/20 p-4 rounded-2xl border border-zinc-800/50 mb-6">
                         <div className="flex flex-col"><span className="text-[10px] text-zinc-500 uppercase font-bold mb-1">Winrate</span><span className={`text-sm font-bold font-mono ${winrate >= 50 ? 'text-emerald-400' : 'text-rose-400'}`}>{winrate}%</span></div>
                         <div className="flex flex-col"><span className="text-[10px] text-zinc-500 uppercase font-bold mb-1">Profit Factor</span><span className="text-sm font-bold font-mono text-zinc-400">{pf}</span></div>
@@ -750,7 +749,6 @@ const handleManualTrade = async (botId, side) => {
                         <div className="flex flex-col"><span className="text-[10px] text-zinc-500 uppercase font-bold mb-1">Net PnL</span><span className={`text-sm font-bold font-mono ${totalPnL >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>${totalPnL.toFixed(2)}</span></div>
                      </div>
 
-                     {/* POSITION DATA */}
                      <div className="mb-8 px-1">
                          <div className="flex justify-between items-center mb-3">
                             <span className="text-xs text-zinc-500 uppercase font-bold tracking-widest">Current Position</span>
@@ -763,7 +761,6 @@ const handleManualTrade = async (botId, side) => {
                              <div className="flex justify-between items-center"><span className="text-xs text-zinc-500">Live PnL</span><span className={`text-xs font-mono font-bold ${state.livePnlPct >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{(state.livePnl || 0) >= 0 ? '+' : ''}${(state.livePnl || 0).toFixed(2)} ({(state.livePnlPct || 0).toFixed(2)}%)</span></div>
                          </div>
                      </div>
-
 
                       {aiSuggestion && (
                         <div className="mt-4 p-4 bg-gradient-to-br from-indigo-900/40 to-purple-900/40 border border-indigo-500/50 rounded-2xl animate-in slide-in-from-top-4 duration-500">
@@ -800,7 +797,6 @@ const handleManualTrade = async (botId, side) => {
 
                      <BotLogTerminal logs={bot.logs || []} />
 
-                     {/* MANUAL OVERRIDES (FOOTER) */}
                      <div className="flex gap-2 mt-4 pt-4 border-t border-zinc-800/50">
                          <button onClick={() => handleManualTrade(bot.id, 'BUY')} className="flex-1 py-2.5 bg-emerald-900/10 hover:bg-emerald-600/20 text-emerald-500 border border-emerald-500/20 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center gap-1.5">
                              <Hand size={12}/> Force Buy
@@ -810,15 +806,10 @@ const handleManualTrade = async (botId, side) => {
                          </button>
                      </div>
 
-                     
-
-                     {/* HISTORY */}
-                      {/* COMPLETED TRADES OVERVIEW */}
-                      {/* Zoek de trade history loop in BotManagerView.jsx */}
+                     <div className="mt-4 space-y-3">
                       {[...stats.trades].reverse().map((t, i) => {
-                        // We definiëren hier veilige constanten met fallbacks
                         const displayEntry = t.entryPrice || 0;
-                        const displayExit = t.exitPrice || 0; // Gebruik t.exitPrice net als entryPrice
+                        const displayExit = t.exitPrice || 0; 
                         const displayPnL = t.pnl || 0;
                         const displayPct = t.pnlPct || 0;
 
@@ -839,7 +830,6 @@ const handleManualTrade = async (botId, side) => {
                               <div className="flex flex-col items-end">
                                 <span className="text-[8px] text-zinc-600 uppercase font-bold tracking-widest">Exit</span>
                                 <span className="text-[11px] font-mono text-zinc-300">
-                                  {/* Als exitPrice 0 is (oude trade), toon dan 'N/A' of 0.0000 */}
                                   ${displayExit > 0 ? displayExit.toFixed(4) : '0.0000'}
                                 </span>
                               </div>
@@ -847,7 +837,7 @@ const handleManualTrade = async (botId, side) => {
                           </div>
                         );
                       })}
-
+                      </div>
 
                   </div>
                  );

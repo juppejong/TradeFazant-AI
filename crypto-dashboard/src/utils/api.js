@@ -17,6 +17,7 @@ export const getApiHeaders = () => {
     'Content-Type': 'application/json',
     'x-kraken-api-key': keys.krakenKey || '',
     'x-kraken-api-secret': keys.krakenSecret || '',
+    'x-gemini-api-key': keys.geminiKey || '',
     'x-cb-api-key': (keys.cbKey || '').trim(),
     // STUUR DE SECRET RUW DOOR: De server repareert de formatering.
     'x-cb-api-secret': keys.cbSecret || '' 
