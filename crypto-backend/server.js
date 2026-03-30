@@ -476,13 +476,22 @@ app.post('/api/orders', requireAuth, async (req, res) => {
     try {
         const apiKey = req.headers['x-kraken-api-key'];
         const apiSecret = req.headers['x-kraken-api-secret'];
-        const openOrders = await krakenPrivateApi('OpenOrders', {}, 3, apiKey, apiSecret);
-        const tradesHistory = await krakenPrivateApi('TradesHistory', {}, 3, apiKey, apiSecret);
+        const cbKey = req.headers['x-coinbase-api-key'];
+        const cbSecret = req.headers['x-coinbase-api-secret'];
+
+        // Haal data op van beide exchanges tegelijk
+        const [krakenOpen, krakenTrades, cbFills] = await Promise.all([
+            krakenPrivateApi('OpenOrders', {}, 3, apiKey, apiSecret),
+            krakenPrivateApi('TradesHistory', {}, 3, apiKey, apiSecret),
+            cbKey ? coinbasePrivateApi('/fills', 'GET', null, cbKey, cbSecret) : Promise.resolve({ fills: [] })
+        ]);
+
         res.json({ 
-            open: openOrders.result?.open || {}, 
-            trades: tradesHistory.result?.trades || {}
+            open: krakenOpen.result?.open || {}, 
+            trades: krakenTrades.result?.trades || {},
+            coinbaseTrades: cbFills.fills || [] // 🔥 Dit is de missende link!
         });
-    } catch (err) { res.status(500).json({ error: err.message || 'Error fetching order history' }); }
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/cancel-order', requireAuth, async (req, res) => {

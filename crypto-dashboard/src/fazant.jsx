@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import ReactDOM from 'react-dom';
-import { calculateSMA, calculateEMA, calculateMACD, calculateBB, calculateRSI } from './utils/indicators';
+import { calculateSMA, calculateEMA, calculateMACD, calculateBB, calculateRSI, calculateADX } from './utils/indicators';
 import { tfMap, getApiHeaders, fetchKrakenPairs, fetchKrakenOHLC, fetchCoinbaseBalances } from './utils/api';
 import PortfolioView from './components/PortfolioView';
 import WhaleHubView from './components/WhaleHubView';
@@ -154,6 +154,30 @@ export default function TradingDashboard() {
 
           const botCurrentClose = data[data.length - 1].close;
           const nowMs = Date.now();
+          // ⚡ CIRCUIT BREAKER LOGICA
+          if (cfg.useCircuitBreaker && state.consecutiveLosses >= cfg.maxConsecutiveLosses) {
+              if (bot.isRunning) {
+                  logMsg = `🛑 CIRCUIT BREAKER ACTIEF! Bot is gepauzeerd na ${state.consecutiveLosses} verliezen op rij.`;
+                  bot.isRunning = false; // Schakel de bot UIT
+              }
+              return bot;
+          }
+
+          // ⏰ TRADING HOURS LOGICA
+          if (cfg.useTimeFilter && cfg.timeStart && cfg.timeEnd) {
+              const now = new Date();
+              const currentMinutes = now.getHours() * 60 + now.getMinutes();
+              const [startH, startM] = cfg.timeStart.split(':').map(Number);
+              const [endH, endM] = cfg.timeEnd.split(':').map(Number);
+              const startMinutes = startH * 60 + startM;
+              const endMinutes = endH * 60 + endM;
+              
+              // Als we buiten de tijden vallen, overrule dan alle koop-signalen
+              if (currentMinutes < startMinutes || currentMinutes > endMinutes) {
+                  // We mogen wel nog verkopen (stop-loss etc), maar we blokkeren nieuwe buys!
+                  buySignal = false; 
+              }
+          }
           let buySignal = false, sellSignal = false;
           let logMsg = `[Analytical] ${updatedBot.pair.display} | $${botCurrentClose.toFixed(4)} | RSI: ${state.currentRsi}`;
 
@@ -161,8 +185,37 @@ export default function TradingDashboard() {
           state.currentPrice = botCurrentClose;
           if (state.totalVolume > 0 && state.averageEntryPrice > 0) {
             state.livePnlPct = ((botCurrentClose - state.averageEntryPrice) / state.averageEntryPrice) * 100;
+            
+            // 🔥 DYNAMIC TRAILING LOGICA 🔥
+            // Onthoud de allerhoogste prijs sinds aankoop
+            if (!state.highestPrice || botCurrentClose > state.highestPrice) {
+                state.highestPrice = botCurrentClose;
+            }
+
+            if (cfg.useDynamicTrailing) {
+                // Bereken de maximale winst (vanaf aankoop tot de piek)
+                const profitFromEntry = ((state.highestPrice - state.averageEntryPrice) / state.averageEntryPrice) * 100;
+                // Bereken hoeveel we zijn gedaald Vanaf die piek
+                const dropFromPeak = ((state.highestPrice - botCurrentClose) / state.highestPrice) * 100;
+                
+                let activeTrailPct = null;
+                let activeTier = 0;
+
+                // Check in welke Tier we zitten (van hoog naar laag!)
+                if (profitFromEntry >= cfg.dynTier3Trigger) { activeTrailPct = cfg.dynTier3Trail; activeTier = 3; }
+                else if (profitFromEntry >= cfg.dynTier2Trigger) { activeTrailPct = cfg.dynTier2Trail; activeTier = 2; }
+                else if (profitFromEntry >= cfg.dynTier1Trigger) { activeTrailPct = cfg.dynTier1Trail; activeTier = 1; }
+
+                // Als we in een Tier zitten, en de daling is groter dan toegestaan -> VERKOOP!
+                if (activeTrailPct !== null && dropFromPeak >= activeTrailPct) {
+                    logMsg = `🔥 Dynamic Trail Tier ${activeTier} Geraakt! (Piek was +${profitFromEntry.toFixed(2)}%, Drop: -${dropFromPeak.toFixed(2)}%)`;
+                    sellSignal = true; // Dit triggert direct de verkoop!
+                }
+            }
+
           } else {
             state.livePnlPct = 0;
+            state.highestPrice = 0; // Reset als we niks in bezit hebben
           }
 
           // 2. Cooldown & Safety Checks
@@ -204,9 +257,7 @@ export default function TradingDashboard() {
             }
           }
 
-
-          // 4. Trailing Intercept & Logic (Opgelost!)
-          // 4. Trailing Intercept & Logic (MOET VOOR DE EXECUTIE STAAN)
+          // 4. Trailing Intercept & Logic
           if (cfg.useTrailing) {
               if (state.phase === 'WAITING') {
                   if (buySignal) {
@@ -249,6 +300,19 @@ export default function TradingDashboard() {
                   } else {
                       logMsg = `📈 Trailing Sell... Wacht op ${cfg.trailingPct}% daling vanaf $${state.extremePrice.toFixed(4)}`;
                   }
+              }
+          }
+
+          // 4.5 ADX Trend Strength Filter
+          if (buySignal && cfg.useAdxFilter && state.totalVolume === 0) {
+              const adxVals = calculateADX(data, 14); // Standaard periode is 14
+              const currentAdx = adxVals[adxVals.length - 1].value;
+              
+              if (currentAdx < cfg.adxThreshold) {
+                  buySignal = false;
+                  logMsg += ` | 🛑 Geen Trend (ADX: ${currentAdx.toFixed(1)} < ${cfg.adxThreshold})`;
+              } else {
+                  logMsg += ` | 📈 Trend OK (ADX: ${currentAdx.toFixed(1)})`;
               }
           }
 
@@ -302,8 +366,9 @@ export default function TradingDashboard() {
                 } else {
                     const resBal = await fetch('http://localhost:3001/api/balance', { method: 'POST', headers: getApiHeaders() });
                     const bData = await resBal.json();
+                    // FIX: Definieer quoteKey correct voor Kraken
                     const quoteKey = cleanQuote === 'USD' ? 'ZUSD' : (cleanQuote === 'EUR' ? 'ZEUR' : cleanQuote);
-                    quoteBalance = parseFloat(bData[baseKey] || bData[cleanBase] || 0);
+                    quoteBalance = parseFloat(bData[quoteKey] || bData[cleanQuote] || 0);
                 }
 
                 const safeQuoteBalance = quoteBalance * 0.98;
@@ -315,16 +380,26 @@ export default function TradingDashboard() {
                 }
 
                 const orderEndpoint = isCoinbase ? 'http://localhost:3001/api/coinbase/order' : 'http://localhost:3001/api/order';
+                // Bereken de prijs voor de Maker Order
+                // We gebruiken .toFixed(4) om binnen de Tick Size van XRP te blijven
+                const makerPrice = parseFloat(botCurrentClose).toFixed(4);
+
                 const res = await fetch(orderEndpoint, {
                   method: 'POST',
                   headers: getApiHeaders(),
                   body: JSON.stringify({ 
                       pair: orderPair, 
-                      type: 'buy', 
+                      type: buySignal ? 'buy' : 'sell', 
+                      
+                      // Gebruik 'limit' voor Maker Fees (indien geconfigureerd)
                       ordertype: cfg.useSmartLimit ? 'limit' : 'market', 
+                      
                       volume: vol,
-                      quoteVolume: spendAmount.toFixed(2),
-                      price: botCurrentClose.toString()
+                      // De prijs MOET gestript zijn van overtollige decimalen
+                      price: makerPrice.toString(), 
+                      
+                      // Post Only zorgt ervoor dat je ALTIJD Maker bent (en nooit per ongeluk Taker)
+                      post_only: cfg.useSmartLimit ? true : false 
                   })
                 });
                 const order = await res.json();
@@ -332,6 +407,7 @@ export default function TradingDashboard() {
                 if (!order.error) {
                   state.totalVolume = vol;
                   state.averageEntryPrice = botCurrentClose;
+                  state.highestPrice = botCurrentClose;
                   state.lastAction = 'BUY';
                   state.lastTradeTime = nowMs;
                   state.phase = 'WAITING'; 
@@ -360,11 +436,13 @@ export default function TradingDashboard() {
             }
             state.isProcessing = false; 
           }
+
           // -- HIER BEGINT DE VERKOOP LOGICA --
           else if (sellSignal && state.totalVolume > 0) {
             state.isProcessing = true;
             try {
                 const isCoinbase = updatedBot.config?.exchange === 'Coinbase';
+                const safePrice = parseFloat(botCurrentClose).toFixed(4);
                 const displayParts = updatedBot.pair.display.split('/');
                 const cleanBase = displayParts[0] === 'XBT' ? 'BTC' : displayParts[0];
                 const cleanQuote = displayParts[1] || 'USD';
@@ -375,6 +453,7 @@ export default function TradingDashboard() {
                     orderPair = `${cleanBase}-${targetQuote}`;
                 }
 
+// ... binnen Sell logica ...
                 let actualBaseBalance = 0;
                 if (isCoinbase) {
                     const resBal = await fetch('http://localhost:3001/api/coinbase/balance', { method: 'POST', headers: getApiHeaders() });
@@ -384,8 +463,10 @@ export default function TradingDashboard() {
                 } else {
                     const resBal = await fetch('http://localhost:3001/api/balance', { method: 'POST', headers: getApiHeaders() });
                     const bData = await resBal.json();
+                    // FIX: De vertaling voor Kraken munten
                     const baseKey = cleanBase === 'BTC' ? 'XXBT' : (cleanBase === 'ETH' ? 'XETH' : cleanBase);
-                    actualBaseBalance = parseFloat(bData[baseKey] || bData[cleanBase] || bData['X' + cleanBase] || 0);
+                    const detectedBase = 'X' + cleanBase; 
+                    actualBaseBalance = parseFloat(bData[baseKey] || bData[detectedBase] || bData[cleanBase] || 0);
                 }
 
                 const volToSell = Math.min(Number(state.totalVolume.toFixed(8)), actualBaseBalance);
@@ -403,7 +484,8 @@ export default function TradingDashboard() {
                       type: 'sell', 
                       ordertype: cfg.useSmartLimit ? 'limit' : 'market', 
                       volume: volToSell,
-                      price: botCurrentClose.toString()
+                      price: safePrice.toString(),
+                      quoteVolume: spendAmount ? spendAmount.toFixed(2) : undefined
                   })
                 });
                 const order = await res.json();
@@ -412,8 +494,6 @@ export default function TradingDashboard() {
                   const pnl = (botCurrentClose - state.averageEntryPrice) * volToSell;
                   const pnlPct = ((botCurrentClose - state.averageEntryPrice) / state.averageEntryPrice) * 100;
 
-                  state.totalVolume = 0;
-                  state.averageEntryPrice = 0;
                   state.lastAction = 'SELL';
                   state.lastTradeTime = nowMs;
                   state.phase = 'WAITING';
@@ -429,6 +509,9 @@ export default function TradingDashboard() {
                       id: Date.now().toString().slice(-8), time: new Date().toLocaleString(),
                       entryPrice: state.averageEntryPrice, exitPrice: botCurrentClose, volume: volToSell, pnl: pnl, pnlPct: pnlPct
                   });
+                  state.totalVolume = 0;
+                  state.averageEntryPrice = 0;
+                  state.highestPrice = 0;
 
                   if (pnl >= 0) {
                       updatedBot.stats.winCount++; updatedBot.stats.grossProfit += pnl;
@@ -510,20 +593,90 @@ if (logMsg !== updatedBot.lastLog) {
   // ==========================================
   // 📜 FETCH ORDERS & HISTORY
   // ==========================================
-  const fetchOrders = async () => {
+const fetchOrders = async () => {
     try {
-      const res = await fetch('http://localhost:3001/api/orders', { method: 'POST', headers: getApiHeaders(), body: JSON.stringify({}) });
+      // 1. Haal data op van beide exchanges (of de gecombineerde endpoint)
+      const res = await fetch('http://localhost:3001/api/orders', { 
+        method: 'POST', 
+        headers: getApiHeaders(), 
+        body: JSON.stringify({}) 
+      });
       const data = await res.json();
       if (data.error) return;
+
+      let allOpen = [];
+      let allTrades = [];
+
+      // --- KRAKEN DATA VERWERKEN ---
       if (data.open) {
-        const openArr = Object.values(data.open).map(o => ({ id: o.descr.txid || Math.random().toString(), time: Math.floor(parseFloat(o.opentm)), date: new Date(o.opentm * 1000).toLocaleString([], {month: 'short', day: '2-digit', hour: '2-digit', minute:'2-digit'}), pair: o.descr.pair, type: o.descr.ordertype, side: o.descr.type === 'buy' ? 'Long' : 'Short', price: parseFloat(o.descr.price), amount: parseFloat(o.vol), fee: 0, pnl: 0 }));
-        setOpenOrders(openArr);
+        const krakenOpen = Object.values(data.open).map(o => ({
+          id: o.descr.txid || Math.random().toString(),
+          time: Math.floor(parseFloat(o.opentm)),
+          date: new Date(o.opentm * 1000).toLocaleString([], {month: 'short', day: '2-digit', hour: '2-digit', minute:'2-digit'}),
+          // 🔥 Schoonmaken van XXRPZUSD naar XRP/USD
+          pair: o.descr.pair.replace('XXBT', 'BTC').replace('XBT', 'BTC').replace('XETH', 'ETH').replace('XXRP', 'XRP').replace('ZUSD', '/USD').replace('ZEUR', '/EUR'),
+          type: o.descr.ordertype,
+          side: o.descr.type === 'buy' ? 'Long' : 'Short',
+          price: parseFloat(o.descr.price),
+          amount: parseFloat(o.vol),
+          exchange: 'Kraken'
+        }));
+        allOpen = [...allOpen, ...krakenOpen];
       }
+
       if (data.trades) {
-        const tradesArr = Object.values(data.trades).map(t => ({ id: t.ordertxid || Math.random().toString(), time: Math.floor(parseFloat(t.time)), date: new Date(t.time * 1000).toLocaleString([], {month: 'short', day: '2-digit', hour: '2-digit', minute:'2-digit'}), pair: t.pair, type: t.ordertype, side: t.type === 'buy' ? 'Long' : 'Short', price: parseFloat(t.price), amount: parseFloat(t.vol), fee: parseFloat(t.fee), cost: parseFloat(t.cost), pnl: 0 })).sort((a,b) => b.time - a.time);
-        setTradeHistory(tradesArr); setPositions(tradesArr); 
+        const krakenTrades = Object.values(data.trades).map(t => ({
+          id: t.ordertxid || Math.random().toString(),
+          time: Math.floor(parseFloat(t.time)),
+          date: new Date(t.time * 1000).toLocaleString([], {month: 'short', day: '2-digit', hour: '2-digit', minute:'2-digit'}),
+          pair: t.pair.replace('XXBT', 'BTC').replace('XBT', 'BTC').replace('XETH', 'ETH').replace('XXRP', 'XRP').replace('ZUSD', '/USD').replace('ZEUR', '/EUR'),
+          type: t.ordertype,
+          side: t.type === 'buy' ? 'Long' : 'Short',
+          price: parseFloat(t.price),
+          amount: parseFloat(t.vol),
+          fee: parseFloat(t.fee),
+          exchange: 'Kraken'
+        }));
+        allTrades = [...allTrades, ...krakenTrades];
       }
-    } catch (e) { }
+
+      // --- COINBASE DATA VERWERKEN ---
+      // (Ervan uitgaande dat je backend Coinbase data in data.coinbaseOrders/Trades stopt)
+      const cbSource = data.coinbaseTrades || data.coinbaseFills || [];
+if (Array.isArray(cbSource) && cbSource.length > 0) {
+        const cbTrades = cbSource.map(t => {
+          // Coinbase gebruikt soms verschillende veldnamen per endpoint
+          const price = parseFloat(t.price || t.avg_price || 0);
+          const amount = parseFloat(t.size || t.amount || t.filled_size || 0);
+          
+          return {
+            id: t.order_id || t.trade_id || Math.random().toString(),
+            time: t.created_at ? new Date(t.created_at).getTime() / 1000 : (t.time || Date.now() / 1000),
+            date: t.created_at ? new Date(t.created_at).toLocaleString([], {month: 'short', day: '2-digit', hour: '2-digit', minute:'2-digit'}) : 'N/A',
+            pair: (t.product_id || 'UNKNOWN').replace('-', '/'),
+            type: 'market',
+            side: (t.side === 'BUY' || t.side === 'buy') ? 'Long' : 'Short',
+            price: price,
+            amount: amount,
+            fee: parseFloat(t.commission || t.fee || 0),
+            exchange: 'Coinbase'
+          };
+        });
+        allTrades = [...allTrades, ...cbTrades];
+      }
+
+      // 2. Alles sorteren op tijd (nieuwste bovenaan)
+      allTrades.sort((a, b) => b.time - a.time);
+      allOpen.sort((a, b) => b.time - a.time);
+
+      // 3. States updaten
+      setOpenOrders(allOpen);
+      setTradeHistory(allTrades); 
+      setPositions(allTrades); // De grafiek markers gebruiken de positions state
+      
+    } catch (e) {
+      console.error("Fout bij ophalen orders:", e);
+    }
   };
   useEffect(() => { fetchOrdersRef.current = fetchOrders; });
 
@@ -540,94 +693,108 @@ if (logMsg !== updatedBot.lastLog) {
   // ==========================================
   // 💰 FETCH BALANCES & EQUITY
   // ==========================================
-// fazant.jsx - Regel 493
-const fetchBalances = async () => {
-    let rawBalancesArray = []; 
-    const now = Math.floor(Date.now() / 1000);
+  // fazant.jsx - Regel 493
+  const fetchBalances = async () => {
+      let rawBalancesArray = []; 
+      const now = Math.floor(Date.now() / 1000);
 
-    // --- 1. KRAKEN FETCH ---
-    try {
-        const resK = await fetch('http://localhost:3001/api/balance', { method: 'POST', headers: getApiHeaders() });
-        const dataK = await resK.json();
-        
-        if (!dataK.error && typeof dataK === 'object') {
-            Object.keys(dataK).forEach(k => { 
-                const amount = parseFloat(dataK[k]);
-                if (amount > 0.00000001) { 
-                    let cleanKey = k.replace('Z', '').replace('X', ''); 
-                    if (k === 'ZUSD') cleanKey = 'USD'; 
-                    if (k === 'XXBT') cleanKey = 'BTC'; 
-                    rawBalancesArray.push({ currency: cleanKey, amount: amount, exchange: 'Kraken' });
-                }
-            });
-        }
-    } catch (e) { console.error("Kraken balance fail", e); }
+      // --- 1. KRAKEN FETCH ---
+      try {
+          const resK = await fetch('http://localhost:3001/api/balance', { method: 'POST', headers: getApiHeaders() });
+          const dataK = await resK.json();
+          if (!dataK.error && typeof dataK === 'object') {
+              Object.keys(dataK).forEach(k => { 
+                  const amount = parseFloat(dataK[k]);
+                  if (amount > 0.00000001) { 
+                      let cleanKey = k.replace('Z', '').replace('X', ''); 
+                      if (k === 'ZUSD') cleanKey = 'USD'; 
+                      if (k === 'XXBT') cleanKey = 'BTC'; 
+                      rawBalancesArray.push({ currency: cleanKey, amount: amount, exchange: 'Kraken' });
+                  }
+              });
+          }
+      } catch (e) { console.error("Kraken balance fail", e); }
 
-    // --- 2. COINBASE FETCH ---
-    if (apiKeys.cbKey) {
-        try {
-            const cbData = await fetchCoinbaseBalances(); 
-            if (Array.isArray(cbData)) {
-                cbData.forEach(acc => {
-                    const amount = acc.amount;
-                    if (amount > 0.00000001) {
-                        const key = acc.currency === 'XBT' ? 'BTC' : acc.currency;
-                        rawBalancesArray.push({ currency: key, amount: amount, exchange: 'Coinbase' });
-                    }
-                });
-            }
-        } catch (e) { console.error("Coinbase balance fail", e); }
-    }
+      // --- 2. COINBASE FETCH ---
+      if (apiKeys.cbKey) {
+          try {
+              const cbData = await fetchCoinbaseBalances(); 
+              if (Array.isArray(cbData)) {
+                  cbData.forEach(acc => {
+                      const amount = parseFloat(acc.amount); // Zorg voor een getal
+                      if (amount > 0.00000001) {
+                          const key = acc.currency === 'XBT' ? 'BTC' : acc.currency;
+                          rawBalancesArray.push({ currency: key, amount: amount, exchange: 'Coinbase' });
+                      }
+                  });
+              }
+          } catch (e) { console.error("Coinbase balance fail", e); }
+      }
 
-    setBalances(rawBalancesArray);
-    setIsLoggedIn(rawBalancesArray.length > 0);
+      // --- 3. PRIJZEN OPHALEN EN DATA VERRIJKEN ---
+      let totalUsdValueForChart = 0;
+      let enrichedBalances = []; // Hier komt de definitieve data
+      const cryptos = [...new Set(rawBalancesArray.filter(b => b.currency !== 'USD').map(b => b.currency))];
 
-    // --- 3. BEREKEN TOTALE USD WAARDE VOOR DE GRAFIEK (DE FIX!) ---
-    let totalUsdValueForChart = 0;
-    const cryptos = [...new Set(rawBalancesArray.filter(b => b.currency !== 'USD').map(b => b.currency))];
+      try {
+          let prices = {};
+          if (cryptos.length > 0) {
+              const pairs = cryptos.map(c => `${c === 'BTC' ? 'XBT' : c}USD`).join(',');
+              const resP = await fetch(`https://api.kraken.com/0/public/Ticker?pair=${pairs}`);
+              const dataP = await resP.json();
+              if (!dataP.error) prices = dataP.result;
+          }
 
-    try {
-        let prices = {};
-        if (cryptos.length > 0) {
-            // Gebruik de openbare Kraken API net als in PortfolioView (werkt altijd!)
-            const pairs = cryptos.map(c => `${c === 'BTC' ? 'XBT' : c}USD`).join(',');
-            const resP = await fetch(`https://api.kraken.com/0/public/Ticker?pair=${pairs}`);
-            const dataP = await resP.json();
-            if (!dataP.error) prices = dataP.result;
-        }
+          // We lopen door de lijst en maken de objecten compleet voor PortfolioView
+          enrichedBalances = rawBalancesArray.map(b => {
+              let price = 0;
+              if (b.currency === 'USD') {
+                  price = 1;
+              } else {
+                  let searchCoin = b.currency === 'BTC' ? 'XBT' : b.currency;
+                  let priceKey = Object.keys(prices).find(k => k.includes(searchCoin));
+                  if (priceKey && prices[priceKey]) {
+                      price = parseFloat(prices[priceKey].c[0]);
+                  }
+              }
 
-        rawBalancesArray.forEach(b => {
-            if (b.currency === 'USD') {
-                totalUsdValueForChart += b.amount;
-            } else {
-                let searchCoin = b.currency === 'BTC' ? 'XBT' : b.currency;
-                let priceKey = Object.keys(prices).find(k => k.includes(searchCoin));
-                if (priceKey && prices[priceKey]) {
-                    totalUsdValueForChart += b.amount * parseFloat(prices[priceKey].c[0]);
-                }
-            }
-        });
-    } catch (e) { console.error("Kon live prijzen niet ophalen voor de grafiek", e); }
+              const value = b.amount * price;
+              totalUsdValueForChart += value;
 
-    // --- 4. GRAFIEK UPDATE ---
-    if (totalUsdValueForChart > 0) {
-        setEquityCurve(currentCurve => {
-            const prevCurve = currentCurve.length > 0 ? currentCurve : (JSON.parse(localStorage.getItem('kraken_equity_curve')) || []);
-            const lastValue = prevCurve[prevCurve.length - 1]?.value || 0;
-            
-            if (Math.abs(totalUsdValueForChart - lastValue) > 0.1 || prevCurve.length === 0) {
-                const newCurve = [...prevCurve, { time: now, value: totalUsdValueForChart }];
-                const trimmedCurve = newCurve.slice(-500); 
-                localStorage.setItem('kraken_equity_curve', JSON.stringify(trimmedCurve));
-                return trimmedCurve;
-            }
-            return prevCurve;
-        });
-    }
+              return {
+                  ...b,
+                  balance: b.amount, // Nu snapt PortfolioView het!
+                  price: price,
+                  value: value
+              };
+          });
+      } catch (e) { 
+          console.error("Kon live prijzen niet ophalen", e);
+          enrichedBalances = rawBalancesArray.map(b => ({ ...b, balance: b.amount, price: 0, value: 0 }));
+      }
 
-    setTimeout(() => fetchOrders(), 1000); 
+      // --- 4. STATES UPDATEN (Pas als de data compleet is!) ---
+      setBalances(enrichedBalances);
+      setIsLoggedIn(enrichedBalances.length > 0);
+
+      // --- 5. GRAFIEK UPDATE ---
+      if (totalUsdValueForChart > 0) {
+          setEquityCurve(currentCurve => {
+              const prevCurve = currentCurve.length > 0 ? currentCurve : (JSON.parse(localStorage.getItem('kraken_equity_curve')) || []);
+              const lastValue = prevCurve[prevCurve.length - 1]?.value || 0;
+              
+              if (Math.abs(totalUsdValueForChart - lastValue) > 0.1 || prevCurve.length === 0) {
+                  const newCurve = [...prevCurve, { time: now, value: totalUsdValueForChart }];
+                  const trimmedCurve = newCurve.slice(-500); 
+                  localStorage.setItem('kraken_equity_curve', JSON.stringify(trimmedCurve));
+                  return trimmedCurve;
+              }
+              return prevCurve;
+          });
+      }
+
+      setTimeout(() => fetchOrders(), 1000); 
   };
-
   const hasFetchedBalance = useRef(false);
   useEffect(() => {
     if (hasFetchedBalance.current) return;
@@ -767,9 +934,9 @@ const fetchBalances = async () => {
         <td className="px-4 py-1.5 text-blue-500 uppercase">{item.type}</td>
         <td className={`px-4 py-1.5 font-bold tracking-wider ${item.side === 'Long' ? 'text-emerald-500' : 'text-rose-500'}`}>{item.side === 'Long' ? 'BUY' : 'SELL'}</td>
         <td className="px-4 py-1.5 font-mono">{item.price >= 10 ? item.price.toLocaleString('en-US', {minimumFractionDigits: 1, maximumFractionDigits: 1}) : item.price}</td>
-        <td className="px-4 py-1.5 font-mono">{item.amount.toFixed(4)}</td>
+        <td className="px-4 py-1.5 font-mono">{(item.amount || 0).toFixed(4)}</td>
         {isHistoryTab && <td className="px-4 py-1.5 font-mono text-amber-500/80">${item.fee?.toFixed(2)}</td>}
-        {!isHistoryTab && !isOpenOrdersTab && <td className={`px-4 py-1.5 text-right font-mono ${item.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{item.pnl >= 0 ? '+' : ''}${item.pnl.toFixed(4)}</td>}
+        {!isHistoryTab && !isOpenOrdersTab && <td className={`px-4 py-1.5 text-right font-mono ${ item.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{item.pnl >= 0 ? '+' : ''}${(item.pnl || 0).toFixed(4)}</td>}
         {isOpenOrdersTab && <td className="px-4 py-1.5 text-right"><button onClick={() => cancelOrder(item.id)} className="text-rose-500 hover:text-white hover:bg-rose-600 border border-rose-500/30 px-2 py-0.5 rounded text-[10px] font-bold transition shadow-sm">Cancel</button></td>}
       </tr>
     ));

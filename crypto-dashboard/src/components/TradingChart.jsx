@@ -164,59 +164,70 @@ const TradingChart = ({ pair, timeframe, showVolume, signals, positions, bots = 
   }, [marketData, showVolume, signals]);
 
     useEffect(() => {
-    if (!seriesRefs.current.candle || !pair) return;
-    
-    // 1. Orders via de exchange API (Kraken)
-    const currentPairPositions = positions.filter(p => p.pair === pair.id || p.pair === pair.altname || p.pair === pair.display);
-    let allMarkers = currentPairPositions.map(pos => { 
-        // FIX: Accepteert nu ook 'Buy' en 'buy'
-        const isBuy = pos.side === 'Long' || pos.side === 'Buy' || pos.side === 'buy'; 
-        return { 
-            time: pos.time - localOffset, 
-            position: isBuy ? 'belowBar' : 'aboveBar', 
-            color: isBuy ? '#10b981' : '#ef4444', 
-            shape: isBuy ? 'arrowUp' : 'arrowDown', 
-            text: `${isBuy ? 'Buy' : 'Sell'} @ ${pos.price}`, 
-            size: 2 
-        }; 
-    });
+        if (!seriesRefs.current.candle || !pair) return;
+        
+        // 🔥 DE ULTIEME KRAKEN & COINBASE MATCH-MAKER
+        const norm = (s) => {
+            if (!s) return '';
+            let n = s.toString().toUpperCase();
+            // Verwijder de irritante Kraken prefixes/suffixes
+            if (n.startsWith('XXBT')) n = n.replace('XXBT', 'BTC');
+            if (n.startsWith('XBT')) n = n.replace('XBT', 'BTC');
+            if (n.startsWith('XETH')) n = n.replace('XETH', 'ETH');
+            if (n.startsWith('XXRP')) n = n.replace('XXRP', 'XRP');
+            if (n.endsWith('ZUSD')) n = n.replace('ZUSD', 'USD');
+            if (n.endsWith('ZEUR')) n = n.replace('ZEUR', 'EUR');
+            // Verwijder daarna alle overige rommel zoals / of -
+            return n.replace(/[^A-Z0-9]/g, '');
+        };
 
-    // 2. Orders direct uit het geheugen van de Bot (Werkt voor Kraken én Coinbase!)
-    const activeBot = bots.find(b => b.pair.id === pair.id || b.pair.altname === pair.altname);
-    if (activeBot) {
-        // Huidige open positie (Buy marker)
-        if (activeBot.state?.totalVolume > 0 && activeBot.state?.entryTime) {
-            allMarkers.push({
-                time: activeBot.state.entryTime - localOffset,
-                position: 'belowBar', color: '#10b981', shape: 'arrowUp',
-                text: `Bot Buy @ ${activeBot.state.averageEntryPrice.toFixed(4)}`, size: 2
+        const chartPairNorm = norm(pair.id) || norm(pair.altname) || norm(pair.display);
+
+        // 1. Filter de posities uit de geschiedenis
+        const currentPairPositions = positions.filter(p => norm(p.pair) === chartPairNorm);
+        
+        let allMarkers = currentPairPositions.map(pos => { 
+            const isBuy = pos.side.toLowerCase().includes('buy') || pos.side === 'Long';
+            
+            // Corrigeer milliseconden naar seconden voor de grafiek
+            let orderTime = pos.time;
+            if (orderTime > 1000000000000) orderTime = orderTime / 1000;
+
+            return { 
+                time: orderTime - localOffset, 
+                position: isBuy ? 'belowBar' : 'aboveBar', 
+                color: isBuy ? '#10b981' : '#ef4444', 
+                shape: isBuy ? 'arrowUp' : 'arrowDown', 
+                text: `${isBuy ? 'Buy' : 'Sell'} @ ${pos.price}`, 
+                size: 2 
+            }; 
+        });
+
+        // 2. Orders direct uit het Bot geheugen
+        const activeBot = bots.find(b => norm(b.pair.id) === chartPairNorm || norm(b.pair.display) === chartPairNorm);
+
+        if (activeBot) {
+            if (activeBot.state?.totalVolume > 0 && activeBot.state?.entryTime) {
+                let entryT = activeBot.state.entryTime;
+                if (entryT > 1000000000000) entryT = entryT / 1000;
+                allMarkers.push({
+                    time: entryT - localOffset,
+                    position: 'belowBar', color: '#10b981', shape: 'arrowUp',
+                    text: `Bot Buy @ ${activeBot.state.averageEntryPrice.toFixed(4)}`, size: 2
+                });
+            }
+            (activeBot.stats?.trades || []).forEach(t => {
+                let eT = t.entryTime; if (eT > 1000000000000) eT = eT / 1000;
+                let xT = t.exitTime; if (xT > 1000000000000) xT = xT / 1000;
+                if (eT) allMarkers.push({ time: eT - localOffset, position: 'belowBar', color: '#10b981', shape: 'arrowUp', text: `Bot Buy @ ${parseFloat(t.entryPrice).toFixed(4)}`, size: 2 });
+                if (xT) allMarkers.push({ time: xT - localOffset, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: `Bot Sell @ ${parseFloat(t.exitPrice).toFixed(4)}`, size: 2 });
             });
         }
-        // Afgesloten posities (geschiedenis)
-        (activeBot.stats?.trades || []).forEach(t => {
-            if (t.entryTime) {
-                allMarkers.push({
-                    time: t.entryTime - localOffset,
-                    position: 'belowBar', color: '#10b981', shape: 'arrowUp',
-                    text: `Bot Buy @ ${parseFloat(t.entryPrice).toFixed(4)}`, size: 2
-                });
-            }
-            if (t.exitTime) {
-                allMarkers.push({
-                    time: t.exitTime - localOffset,
-                    position: 'aboveBar', color: '#ef4444', shape: 'arrowDown',
-                    text: `Bot Sell @ ${parseFloat(t.exitPrice).toFixed(4)}`, size: 2
-                });
-            }
-        });
-    }
 
-    // Voorkom dubbele markers en sorteer ze netjes op tijd
-    const uniqueMarkers = Array.from(new Map(allMarkers.map(m => [m.time + m.text, m])).values());
-    uniqueMarkers.sort((a, b) => a.time - b.time);
-    
-    seriesRefs.current.candle.setMarkers(uniqueMarkers);
-  }, [positions, bots, pair]);
+        const uniqueMarkers = Array.from(new Map(allMarkers.map(m => [m.time + m.text, m])).values());
+        uniqueMarkers.sort((a, b) => a.time - b.time);
+        seriesRefs.current.candle.setMarkers(uniqueMarkers);
+    }, [positions, bots, pair]);
 
   useEffect(() => {
     if (marketData.length === 0 || !pair || !pair.wsname || !chartRef.current) return;

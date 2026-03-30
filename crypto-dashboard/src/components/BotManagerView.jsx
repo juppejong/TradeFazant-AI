@@ -142,6 +142,15 @@ const BotManagerView = ({ bots, setBots, availablePairs, activePair, setActivePa
   const [useDca, setUseDca] = useState(false);
   const [dcaCount, setDcaCount] = useState(3);
   const [dcaDropPct, setDcaDropPct] = useState(2.0);
+
+  // Dynamic Trailing (Nieuw!)
+  const [useDynamicTrailing, setUseDynamicTrailing] = useState(false);
+  const [dynTier1Trigger, setDynTier1Trigger] = useState(0.2);
+  const [dynTier1Trail, setDynTier1Trail] = useState(0.4);
+  const [dynTier2Trigger, setDynTier2Trigger] = useState(0.4);
+  const [dynTier2Trail, setDynTier2Trail] = useState(0.3);
+  const [dynTier3Trigger, setDynTier3Trigger] = useState(0.6);
+  const [dynTier3Trail, setDynTier3Trail] = useState(0.2);
   
   // Safety
   const [useCircuitBreaker, setUseCircuitBreaker] = useState(false);
@@ -166,17 +175,24 @@ const BotManagerView = ({ bots, setBots, availablePairs, activePair, setActivePa
 
   // --- ACTIONS ---
   const startEditing = (bot) => {
+    const cfg = bot.config || {};
     setEditingBotId(bot.id);
     setUseSmartLimit(cfg.useSmartLimit ?? true);
     setNewBotPair(bot.pair);
     setNewBotStrategy(bot.strategy);
-    const cfg = bot.config || {};
     setNewBotExchange(cfg.exchange || 'Kraken'); // Laad exchange
     setBotTimeframe(cfg.timeframe || '15m');
     setTradePercent(cfg.tradePercent || '10');
     setSlPct(cfg.slPct || 3.0);
     setTpPct(cfg.tpPct || 6.0);
     setUseTrailing(cfg.useTrailing ?? true);
+    setUseDynamicTrailing(cfg.useDynamicTrailing ?? false);
+    setDynTier1Trigger(cfg.dynTier1Trigger || 0.2);
+    setDynTier1Trail(cfg.dynTier1Trail || 0.4);
+    setDynTier2Trigger(cfg.dynTier2Trigger || 0.4);
+    setDynTier2Trail(cfg.dynTier2Trail || 0.3);
+    setDynTier3Trigger(cfg.dynTier3Trigger || 0.6);
+    setDynTier3Trail(cfg.dynTier3Trail || 0.2);
     setTrailingPct(cfg.trailingPct || 0.5);
     setUseBreakEven(cfg.useBreakEven ?? false);
     setBreakEvenTrigger(cfg.breakEvenTrigger || 2.0);
@@ -214,6 +230,10 @@ const BotManagerView = ({ bots, setBots, availablePairs, activePair, setActivePa
         timeframe: botTimeframe, sizingType: 'percent', tradePercent: parseNum(tradePercent),
         slPct: parseNum(slPct), tpPct: parseNum(tpPct),
         useTrailing, trailingPct: parseNum(trailingPct),
+        useDynamicTrailing,
+        dynTier1Trigger: parseNum(dynTier1Trigger), dynTier1Trail: parseNum(dynTier1Trail),
+        dynTier2Trigger: parseNum(dynTier2Trigger), dynTier2Trail: parseNum(dynTier2Trail),
+        dynTier3Trigger: parseNum(dynTier3Trigger), dynTier3Trail: parseNum(dynTier3Trail),
         useBreakEven, breakEvenTrigger: parseNum(breakEvenTrigger),useSmartLimit,
         useCircuitBreaker, maxConsecutiveLosses: parseInt(maxConsecutiveLosses),
         rsiPeriod: parseInt(rsiPeriod), rsiBuyLevel: parseInt(rsiBuyLevel), rsiSellLevel: parseInt(rsiSellLevel),
@@ -279,6 +299,7 @@ const BotManagerView = ({ bots, setBots, availablePairs, activePair, setActivePa
         const data = await fetchKrakenOHLC(1, bot.pair.altname); 
         if (!data || data.length === 0) throw new Error("Market data unavailable.");
         const currentPrice = data[data.length - 1].close;
+        const safePrice = parseFloat(currentPrice).toFixed(4);
 
         if (side === 'BUY') {
             let quoteBalance = 0;
@@ -316,7 +337,7 @@ const BotManagerView = ({ bots, setBots, availablePairs, activePair, setActivePa
                     ordertype: bot.config.useSmartLimit ? 'limit' : 'market', 
                     volume: volumeToBuy,
                     quoteVolume: spendAmount.toFixed(2),
-                    price: currentPrice.toString() // Nodig voor limit orders!
+                    price: safePrice.toString() // Nodig voor limit orders!
                 })
             });
             const oData = await resOrder.json();
@@ -352,7 +373,7 @@ const BotManagerView = ({ bots, setBots, availablePairs, activePair, setActivePa
                     type: 'sell', 
                     ordertype: bot.config.useSmartLimit ? 'limit' : 'market', 
                     volume: volToSell,
-                    price: currentPrice.toString()
+                    price: safePrice.toString()
                 })
             });
             const oData = await resOrder.json();
@@ -586,6 +607,32 @@ const BotManagerView = ({ bots, setBots, availablePairs, activePair, setActivePa
                     )}
                   </div>
 
+                  <div className={`p-5 rounded-2xl border transition-all ${useDynamicTrailing ? 'bg-fuchsia-500/5 border-fuchsia-500/30 shadow-lg' : 'bg-[#09090b] border-zinc-800/50'}`}>
+                    <div className="flex justify-between items-center mb-3">
+                       <h4 className="text-xs uppercase text-fuchsia-400 font-bold flex items-center gap-2">
+                         <TrendingUp size={14}/> Dynamic Step-Trailing
+                         <InfoTooltip text="Trekt de trailing stop steeds strakker aan naarmate de winst stijgt." />
+                       </h4>
+                       <label className="flex items-center space-x-2 cursor-pointer"><input type="checkbox" checked={useDynamicTrailing} onChange={e => setUseDynamicTrailing(e.target.checked)} className="accent-fuchsia-500 w-4 h-4" /><span className="text-[10px] text-fuchsia-400 font-bold uppercase">ON</span></label>
+                    </div>
+                    {useDynamicTrailing && (
+                        <div className="space-y-3 mt-4">
+                            <div className="grid grid-cols-2 gap-2 bg-black/40 p-2 rounded-lg border border-white/5">
+                                <div className="space-y-1"><label className="text-[9px] text-zinc-500 font-bold uppercase">Tier 1: Trigger bij +%</label><input type="number" step="0.1" value={dynTier1Trigger} onChange={e => setDynTier1Trigger(e.target.value)} className="w-full bg-[#050505] border border-fuchsia-900/30 rounded p-1.5 text-xs text-center outline-none text-fuchsia-300" /></div>
+                                <div className="space-y-1"><label className="text-[9px] text-zinc-500 font-bold uppercase">Trail met -%</label><input type="number" step="0.1" value={dynTier1Trail} onChange={e => setDynTier1Trail(e.target.value)} className="w-full bg-[#050505] border border-fuchsia-900/30 rounded p-1.5 text-xs text-center outline-none text-rose-400" /></div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2 bg-black/40 p-2 rounded-lg border border-white/5">
+                                <div className="space-y-1"><label className="text-[9px] text-zinc-500 font-bold uppercase">Tier 2: Trigger bij +%</label><input type="number" step="0.1" value={dynTier2Trigger} onChange={e => setDynTier2Trigger(e.target.value)} className="w-full bg-[#050505] border border-fuchsia-900/30 rounded p-1.5 text-xs text-center outline-none text-fuchsia-300" /></div>
+                                <div className="space-y-1"><label className="text-[9px] text-zinc-500 font-bold uppercase">Trail met -%</label><input type="number" step="0.1" value={dynTier2Trail} onChange={e => setDynTier2Trail(e.target.value)} className="w-full bg-[#050505] border border-fuchsia-900/30 rounded p-1.5 text-xs text-center outline-none text-rose-400" /></div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2 bg-black/40 p-2 rounded-lg border border-white/5">
+                                <div className="space-y-1"><label className="text-[9px] text-zinc-500 font-bold uppercase">Tier 3: Trigger bij +%</label><input type="number" step="0.1" value={dynTier3Trigger} onChange={e => setDynTier3Trigger(e.target.value)} className="w-full bg-[#050505] border border-fuchsia-900/30 rounded p-1.5 text-xs text-center outline-none text-fuchsia-300" /></div>
+                                <div className="space-y-1"><label className="text-[9px] text-zinc-500 font-bold uppercase">Trail met -%</label><input type="number" step="0.1" value={dynTier3Trail} onChange={e => setDynTier3Trail(e.target.value)} className="w-full bg-[#050505] border border-fuchsia-900/30 rounded p-1.5 text-xs text-center outline-none text-rose-400" /></div>
+                            </div>
+                        </div>
+                    )}
+                  </div>
+
                   <div className={`p-5 rounded-2xl border transition-all ${useDca ? 'bg-blue-500/5 border-blue-500/30 shadow-lg' : 'bg-[#09090b] border-zinc-800/50'}`}>
                     <div className="flex justify-between items-center mb-3">
                        <h4 className="text-xs uppercase text-blue-400 font-bold flex items-center gap-2">
@@ -697,7 +744,15 @@ const BotManagerView = ({ bots, setBots, availablePairs, activePair, setActivePa
                           <button onClick={() => setBots(bots.map(b => b.id === bot.id ? { ...b, isRunning: !b.isRunning } : b))} className="p-2 transition-colors group/btn" title={bot.isRunning ? "Pause Bot" : "Start Bot"}>
                             {bot.isRunning ? <Pause size={18} className="text-amber-500 group-hover/btn:scale-110 transition-transform" /> : <Play size={18} className="text-emerald-500 group-hover/btn:scale-110 transition-transform" />}
                           </button>
-                          <button onClick={() => startEditing(bot)} className="p-2 text-zinc-500 hover:text-blue-400 transition-colors"><Settings size={18} /></button>
+                          <button 
+                            onClick={() => {
+                              console.log("Klik op settings voor bot:", bot.id); // Debug check
+                              startEditing(bot);
+                            }} 
+                            className="p-2 text-zinc-500 hover:text-blue-400 transition-colors"
+                          >
+                            <Settings size={18} />
+                          </button>
                           <button onClick={() => { if(window.confirm("Are you sure you want to delete this bot?")) setBots(bots.filter(b => b.id !== bot.id)); }} className="p-2 text-zinc-600 hover:text-rose-500 transition-colors"><Trash2 size={18} /></button>
                         </div>
                       </div>
@@ -751,15 +806,33 @@ const BotManagerView = ({ bots, setBots, availablePairs, activePair, setActivePa
                         </div>
                       </div>
 
-                     <div className="flex flex-wrap gap-2 mb-8">
-                        <span className="text-[10px] bg-zinc-800 text-zinc-400 px-2.5 py-1 rounded-md font-mono font-bold">{bot.config?.timeframe || '15m'}</span>
-                        <span className="text-[10px] bg-blue-600/20 text-blue-400 border border-blue-500/20 px-2.5 py-1 rounded-md font-bold uppercase">{bot.strategy?.replace('_', ' ') || 'RSI'}</span>
-                        {bot.config?.useBreakEven && <span className="text-[10px] bg-teal-600/20 text-teal-400 border border-teal-500/20 px-2.5 py-1 rounded-md font-bold uppercase tracking-wider">Break-Even</span>}
-                        {bot.config?.useTrailing && <span className="text-[10px] bg-amber-600/20 text-amber-400 border border-amber-500/20 px-2.5 py-1 rounded-md font-bold uppercase tracking-wider">Trail</span>}
-                        {bot.config?.useCircuitBreaker && <span className="text-[10px] bg-rose-600/20 text-rose-400 border border-rose-500/20 px-2.5 py-1 rounded-md font-bold uppercase tracking-wider">Breaker</span>}
-                        {bot.config?.useAiFilter && <span className="text-[10px] bg-purple-600/20 text-purple-400 border border-purple-500/20 px-2.5 py-1 rounded-md font-bold uppercase tracking-wider">AI Filter</span>}
-                        {bot.config?.useDca && <span className="text-[10px] bg-blue-600/20 text-blue-400 border border-blue-500/20 px-2.5 py-1 rounded-md font-bold uppercase tracking-wider">DCA</span>}
-                     </div>
+                      <div className="flex flex-wrap gap-2 mb-8">
+                          {/* Basis Settings */}
+                          <span className="text-[10px] bg-zinc-800 text-zinc-400 px-2.5 py-1 rounded-md font-mono font-bold">{bot.config?.timeframe || '15m'}</span>
+                          <span className="text-[10px] bg-blue-600/20 text-blue-400 border border-blue-500/20 px-2.5 py-1 rounded-md font-bold uppercase">{bot.strategy?.replace('_', ' ') || 'RSI'}</span>
+                          
+                          {/* Trailing & Exit Strategies */}
+                          {bot.config?.useDynamicTrailing ? (
+                              <span className="text-[10px] bg-fuchsia-600/20 text-fuchsia-400 border border-fuchsia-500/20 px-2.5 py-1 rounded-md font-bold uppercase tracking-wider" title="Dynamic Step-Trailing">Dyn Trail</span>
+                          ) : bot.config?.useTrailing ? (
+                              <span className="text-[10px] bg-amber-600/20 text-amber-400 border border-amber-500/20 px-2.5 py-1 rounded-md font-bold uppercase tracking-wider" title="Fixed Trailing Stop">Trail</span>
+                          ) : null}
+                          {bot.config?.useBreakEven && <span className="text-[10px] bg-teal-600/20 text-teal-400 border border-teal-500/20 px-2.5 py-1 rounded-md font-bold uppercase tracking-wider" title="Break-Even Stop">Break-Even</span>}
+                          
+                          {/* Risk & Safety */}
+                          {bot.config?.useDynamicRisk && <span className="text-[10px] bg-emerald-600/20 text-emerald-400 border border-emerald-500/20 px-2.5 py-1 rounded-md font-bold uppercase tracking-wider" title="ATR Dynamic Risk">ATR Risk</span>}
+                          {bot.config?.useCircuitBreaker && <span className="text-[10px] bg-rose-600/20 text-rose-400 border border-rose-500/20 px-2.5 py-1 rounded-md font-bold uppercase tracking-wider" title="Circuit Breaker Active">Breaker</span>}
+                          
+                          {/* Filters */}
+                          {bot.config?.useAiFilter && <span className="text-[10px] bg-purple-600/20 text-purple-400 border border-purple-500/20 px-2.5 py-1 rounded-md font-bold uppercase tracking-wider" title="Gemini AI Filter">AI Filter</span>}
+                          {bot.config?.useAdxFilter && <span className="text-[10px] bg-sky-600/20 text-sky-400 border border-sky-500/20 px-2.5 py-1 rounded-md font-bold uppercase tracking-wider" title="ADX Trend Filter">ADX</span>}
+                          {bot.config?.useVolumeFilter && <span className="text-[10px] bg-indigo-600/20 text-indigo-400 border border-indigo-500/20 px-2.5 py-1 rounded-md font-bold uppercase tracking-wider" title="Volume Surge Filter">Volume</span>}
+                          {bot.config?.useTimeFilter && <span className="text-[10px] bg-orange-600/20 text-orange-400 border border-orange-500/20 px-2.5 py-1 rounded-md font-bold uppercase tracking-wider" title="Session Time Filter">Time</span>}
+                          
+                          {/* Execution */}
+                          {bot.config?.useDca && <span className="text-[10px] bg-blue-600/20 text-blue-400 border border-blue-500/20 px-2.5 py-1 rounded-md font-bold uppercase tracking-wider" title="DCA Enabled">DCA</span>}
+                          {bot.config?.useSmartLimit && <span className="text-[10px] bg-yellow-600/20 text-yellow-500 border border-yellow-500/20 px-2.5 py-1 rounded-md font-bold uppercase tracking-wider" title="Maker Fee Optimization">Maker</span>}
+                      </div>
 
                      <div className="grid grid-cols-4 gap-4 bg-black/20 p-4 rounded-2xl border border-zinc-800/50 mb-6">
                         <div className="flex flex-col"><span className="text-[10px] text-zinc-500 uppercase font-bold mb-1">Winrate</span><span className={`text-sm font-bold font-mono ${winrate >= 50 ? 'text-emerald-400' : 'text-rose-400'}`}>{winrate}%</span></div>

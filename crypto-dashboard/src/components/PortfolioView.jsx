@@ -309,7 +309,7 @@ const PortfolioView = ({ balances, scriptLoaded, onRefresh, tradeHistory = [] })
                                     </td>
                                     <td className="py-4 bg-black/40 border-y border-white/5 font-mono text-zinc-300">${t.price.toFixed(2)}</td>
                                     <td className={`py-4 pr-4 bg-black/40 rounded-r-2xl border-y border-r border-white/5 text-right font-mono font-black ${t.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                                        {t.pnl >= 0 ? '+' : ''}{t.pnl.toFixed(2)}
+                                        {t.pnl >= 0 ? '+' : ''}{(t.pnl|| 0).toFixed(2)}
                                     </td>
                                 </tr>
                             ))}
